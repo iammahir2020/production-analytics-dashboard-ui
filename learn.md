@@ -143,3 +143,40 @@ find components lib hooks -maxdepth 2 | sort   # confirmed final structure
 ```
 
 **How this moves the build forward:** Phase 1 (types, mock data, service layer) writes directly into `lib/api`, `lib/types`, `lib/data`, and `lib/format.ts` — all of it has a defined home before a single line of that code gets written.
+
+## Step 5 — git init and initial commit
+
+**What was done:** Initialized git in the repo and made one root commit covering everything from Phase 0 — the Next.js scaffold, shadcn/ui setup (with the font-variable fix), `recharts`/`date-fns`, the planned folder structure, and the existing planning docs (`plan.md`, `step.md`, `learn.md`, the task PDF).
+
+**Why this way:** One commit for all of Phase 0 rather than one per step — the individual steps (scaffold, shadcn init, dependencies, folders) aren't independently meaningful checkpoints on their own; together they're "the project exists and is set up," which is the real unit of work worth a commit message. This matches the commit-point convention in `step.md`: suggested at the end of a phase, not after every step.
+
+**Problem avoided:** Before committing, staged files were reviewed (`git status` after `git add -A`) to confirm nothing unexpected was going in — no `.env` files, no `node_modules`/`.next` build output (both already excluded by the generated `.gitignore`), nothing that looked like it could contain a secret.
+
+**Worth noting, not a problem exactly:** the task PDF is now committed into what will eventually be a public repo. That's the employer's own assessment document — flagged for awareness rather than acted on unilaterally, since whether to keep it in a public repo is a call for whoever owns the submission, not something to decide silently either way.
+
+**Verification:** `git log --oneline` shows the single root commit; `git status` reports a clean working tree afterward.
+
+**Commands run:**
+```
+ls -la .git          # confirmed no existing repo
+git status            # (fatal: not a git repository) — confirmed clean start
+
+git init
+
+git status            # reviewed untracked files before staging
+git add -A
+git status            # reviewed staged files before committing
+
+git commit -m "Scaffold Next.js project and set up base tooling
+
+- Next.js 16.3.5 (App Router, TS strict, Tailwind, ESLint, no src/) via create-next-app
+- shadcn/ui initialized (Nova preset) with a Next.js font-variable bug fixed in globals.css
+- recharts + date-fns installed for charts and date handling
+- Planned folder structure created (components/, lib/api, lib/types, lib/data, hooks/)
+- Planning docs (plan.md, step.md, learn.md) and task PDF included"
+
+git log --oneline    # → 3aeb1e8 Scaffold Next.js project and set up base tooling
+git status            # → nothing to commit, working tree clean
+```
+
+**How this moves the build forward:** there's now a real git history to build on — every subsequent phase adds its own commit at its own suggested commit point, and this baseline is a safe point to diff against or return to if something later goes wrong. No remote exists yet; that's created and pushed only with explicit confirmation, per the plan.

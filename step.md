@@ -23,7 +23,7 @@ Each step is a single, reviewable unit of work. Check it off after reviewing, th
 - [x] 2. Initialize shadcn/ui (`npx shadcn init`) and set base theme/tokens
 - [x] 3. Install remaining dependencies: `recharts`, `date-fns`
 - [x] 4. Create empty folder structure: `components/{ui,dashboard,orders,shared}`, `lib/{api,types,data}`, `hooks/` (no `lib/utils/` — shadcn's `lib/utils.ts` file already owns that name; formatters go in `lib/format.ts` instead, see step 13)
-- [ ] 5. `git init`, initial commit — **(pause before creating/pushing to a remote GitHub repo)**
+- [x] 5. `git init`, initial commit — **(pause before creating/pushing to a remote GitHub repo)**
 
 ⏸ **Checkpoint — skill files.** This is where you'll add any skill files to the repo for infrastructure, coding-pattern, and UI-design guidance. I'll pick them up and apply them from here through the rest of the build — flag me if I miss one.
 
@@ -84,7 +84,7 @@ Each step is a single, reviewable unit of work. Check it off after reviewing, th
 ## Phase 5 — Basic Testing
 
 - [ ] 35. Install and configure Jest + React Testing Library via `next/jest` (jsdom environment); add `npm test` script
-- [ ] 36. Unit tests: `lib/utils/format.ts` formatters (currency, date)
+- [ ] 36. Unit tests: `lib/format.ts` formatters (currency, date)
 - [ ] 37. Unit tests: `lib/api/client.ts` `mockFetch` (resolves with data after delay; throws when fail rate triggers)
 - [ ] 38. Unit tests: `lib/api/orders.ts` `getOrders(filters)` — status filter, search filter, date-range filter, pagination slicing
 - [ ] 39. Component test: `SummaryCards` renders the correct values from props
