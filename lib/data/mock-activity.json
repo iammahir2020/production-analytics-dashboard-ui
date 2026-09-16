@@ -70,7 +70,7 @@
   {
     "id": "act_006",
     "type": "order_created",
-    "message": "New order ord_0173 placed by Jannatul Akter — ৳113,000.00",
+    "message": "New order ord_0173 placed by Jannatul Akter — ৳1,13,000.00",
     "timestamp": "2026-09-10T22:17:02.074Z",
     "relatedOrderId": "ord_0173"
   },
@@ -125,7 +125,7 @@
   {
     "id": "act_013",
     "type": "order_created",
-    "message": "New order ord_0136 placed by Arif Rahman — ৳118,000.00",
+    "message": "New order ord_0136 placed by Arif Rahman — ৳1,18,000.00",
     "timestamp": "2026-09-06T01:54:07.323Z",
     "relatedOrderId": "ord_0136"
   },

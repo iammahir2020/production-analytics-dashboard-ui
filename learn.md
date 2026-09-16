@@ -545,3 +545,167 @@ rm -rf .next                             # cleaned up build artifacts
 ```
 
 **How this moves the build forward:** Phase 2 onward is now built directly against Bangladesh-relevant data and formatting from the start, rather than needing a retrofit later — every dashboard number, table row, and chart tooltip will show ৳ figures and Bangladeshi names natively.
+
+## Design checkpoint — visual direction confirmed ("Khata")
+
+**What was done:** Before writing any Phase 2 component, ran the `interface-design` skill's process (domain exploration → proposed direction → user review) rather than defaulting to shadcn's unstyled Nova preset. Produced a working direction called "Khata" (খাতা — ledger/account book), published as a live specimen artifact rather than just described in prose, then iterated it once (added a live light/dark/system toggle and an explicit both-themes palette reference table) after the user asked to see both themes explicitly rather than relying on the artifact matching whatever theme their OS happened to be in. Saved the confirmed decisions to `.interface-design/system.md` so every component built from here on inherits them automatically instead of the direction living only in this conversation's memory.
+
+**The domain work, condensed** (full reasoning is in the chat transcript, not duplicated into the specimen page itself — the skill is explicit that a rendered specimen shows the visual only, reasoning stays in prose): grounded the direction in Bangladesh e-commerce specifically — Cash-on-Delivery as the dominant payment mode, courier partners (Pathao, Sundarban, RedX, Steadfast) as the real operational anxiety point, mobile financial services (bKash/Nagad/Rocket) as the market's actual "trusted money" color language, and the lakh/crore digit-grouping convention. Rejected four defaults explicitly: cool blue/indigo SaaS accent, rounded pill/badge status chips, Western thousands-grouped currency, and Geist/generic-grotesk-with-no-personality.
+
+**Two decisions worth calling out specifically:**
+- **Lakh-style digit grouping** (`৳45,59,700`, not `৳4,559,700`) was verified empirically before being proposed — tested `Intl.NumberFormat` under `en-BD`, `bn-BD`, and `en-US` locales first (`node -e`) rather than assuming a locale string would produce the right output. Found that `en-BD`/`en-US` both fall back to the literal `"BDT"` code (no ৳ glyph in their ICU data) and `bn-BD` has the glyph but converts digits to Bengali numerals too — settled on `bn-BD` with `numberingSystem: "latn"` forced, which gives exactly the lakh-grouped-Western-digits convention real Bangladeshi apps use. This is now a planned change to `lib/format.ts`'s `formatCurrency` (currently Western-grouped from the earlier Bangladesh localization pass) — not yet applied to the actual codebase, only confirmed in the specimen; needs to land as part of an upcoming step.
+- **Avoiding a recognized AI-slop cluster.** The light palette (warm aged-paper ground) sits close to a known pattern (cream + serif + terracotta accent) — deliberately broke two of the three legs to get clear of it: no serif anywhere (Hanken Grotesk throughout, chosen partly *because* a data-dense ops tool benefits from one consistent grotesk system rather than a display/body pairing), and the accent is rose/magenta, not terracotta (terracotta is demoted to just the "refunded" status color, one of five, not the brand identity).
+
+**Problem avoided:** shipping the shadcn Nova preset's neutral, out-of-the-box tokens by default — which is precisely the "generic AI dashboard" look flagged as a risk before this checkpoint even started (see the earlier feedback memory on UI quality). Also avoided over-committing before review: nothing in `app/` was touched during this checkpoint — the entire direction lived in a disposable artifact until confirmed.
+
+**A follow-up requested and completed within this checkpoint:** the user asked whether both themes could be shown explicitly rather than relying on the specimen matching whatever theme their system happened to be in. Added a live 3-state toggle (Light/Dark/System) to the specimen — which doubles as a rough prototype of the real `ThemeToggle` component that step 13.2 builds — plus a static side-by-side table listing every token's exact hex value in both themes, so the palette is readable without needing to toggle anything.
+
+**Verification:** the specimen artifact renders and both themes were checked via the in-page toggle before presenting; `.interface-design/system.md` was written to match exactly what was shown and confirmed, not extended with anything not actually reviewed.
+
+**How this moves the build forward:** every component from step 13.1 onward is built against a written, confirmed spec — colors, type, spacing, depth, and specific component patterns (status treatment, summary-card hero figures, currency formatting) are already decided, not improvised per-component.
+
+**Follow-up, closed immediately rather than left as a dangling to-do:** switched `lib/format.ts`'s `formatCurrency` (and the generator's matching `formatTaka()` helper) from Western to lakh-style grouping — `Intl.NumberFormat("bn-BD", { numberingSystem: "latn" })` — to match the confirmed direction. Regenerated the mock data and confirmed via diff that `mock-orders.json`/`mock-customers.json` came out byte-identical (only the pre-baked activity-message *text* changed, since that's the only place currency gets formatted into stored strings); spot-checked real lakh-boundary amounts in the regenerated activity data (`৳1,13,000.00`, `৳1,18,000.00`) to confirm the grouping actually kicks in where it matters, not just at the specific value tested in isolation. `npm run build` + `npx tsc --noEmit` + `npm run lint` all clean afterward.
+
+## Step 13.1 — Apply the Khata design tokens to app/globals.css
+
+**What was done:** Replaced shadcn's neutral Nova preset color tokens with the confirmed Khata palette, for both `:root` (light) and `.dark`, and swapped the loaded font from Geist to Hanken Grotesk in `app/layout.tsx` (dropped Geist Mono too — nothing in this app needs a monospace face; tabular number alignment comes from `font-variant-numeric: tabular-nums`, not a mono font). Also caught myself mid-edit: `app/layout.tsx`'s `metadata.title` briefly said "Khata" before I reverted it — that's a real product-naming decision the user hasn't confirmed yet (only the *visual* direction was confirmed, not the name), so the page title/description stay generic ("Production Analytics Dashboard") until that's actually settled, while "Khata" stays as the internal design-system name in `.interface-design/system.md`.
+
+**Why this way — the token mapping, not just the values:** shadcn/ui components (`Button`, `Select`, every future `components/ui/*` primitive) read Tailwind utility classes like `bg-primary`, `text-muted-foreground`, `bg-accent` — not custom Khata-named variables. So this wasn't "invent new variable names for the palette," it was mapping each Khata concept onto shadcn's *existing* semantic slots: the Khata brand rose → `--primary` (shadcn's "main CTA/brand" slot), Khata's surface → `--card`, Khata's ink-muted → `--muted-foreground`, and so on. This is what "use what exists" (the `interface-design` skill's own rule, and the project's established "no unnecessary abstraction" principle) actually means in practice — every future shadcn component inherits the direction automatically, with zero extra work, because it's using the same variables it always would have.
+
+**A naming collision worth being explicit about:** shadcn already has its own `--accent`/`--accent-foreground` tokens, conventionally used for a *subtle hover/highlight surface* (a dropdown item on hover, for instance) — a completely different concept from what this whole build has been calling "the Khata accent" (the brand rose). Mapping the brand rose onto shadcn's `--accent` slot would have been a real, easy-to-make mistake — it would silently repaint every hover state rose instead of using it for the "one accent used with intention" hero moments the direction actually calls for. The brand rose maps to `--primary` instead; shadcn's own `--accent` gets a proper subtle warm-neutral tint, doing the job it's actually meant for.
+
+**Chart colors reuse the order-status palette, not a separate invented set.** `--chart-1` through `--chart-5` map to accent/success/warning/neutral/danger — the exact same five colors the ledger-stamp order-status treatment uses. One color language for "what state is this order in" across the table *and* the charts, rather than two unrelated palettes that happen to share a page.
+
+**Verification:** `npm run build` + `npx tsc --noEmit` + `npm run lint` all clean. Started the dev server and checked the actual rendered output rather than trusting the source alone: the `<html>` tag carries the Hanken Grotesk font-variable class, and the compiled CSS bundle was fetched directly and grepped — confirmed `--background: #f5f2ea` (light) / `#17130f` (dark) and `--primary: #a22a52` (light) / `#e0567f` (dark) both present and correct, plus `--font-sans: var(--font-hanken-grotesk)` resolving correctly. (The current page still shows `create-next-app`'s default boilerplate content — step 14 hasn't happened yet — so this check was necessarily about the tokens compiling and applying correctly, not about how the real dashboard looks yet.)
+
+**Commands run:**
+```
+npm run build      # succeeded
+npx tsc --noEmit   # clean
+npm run lint       # clean
+
+nohup npm run dev > /tmp/nextdev5.log 2>&1 & disown
+curl -s http://localhost:3000 -o /tmp/page5.html
+grep -o '<html[^>]*>' /tmp/page5.html
+# → class="hanken_grotesk_...__variable h-full antialiased"
+
+curl -s "http://localhost:3000/_next/static/chunks/<bundle>.css" -o /tmp/bundle5.css
+grep -o -- '--background:[^;}]*' /tmp/bundle5.css   # → #f5f2ea, #17130f
+grep -o -- '--primary:[^;}]*' /tmp/bundle5.css      # → #a22a52, #e0567f
+grep -o -- '--font-sans:[^;}]*' /tmp/bundle5.css    # → var(--font-hanken-grotesk)
+
+pkill -f "next-server"; pkill -f "next dev"
+rm -f /tmp/page5.html /tmp/bundle5.css /tmp/nextdev5.log
+rm -rf .next
+```
+
+**How this moves the build forward:** every component built from step 13.2 onward — the theme toggle, the nav shell, then the actual dashboard components — renders in the confirmed Khata palette automatically, in both themes, without needing per-component color decisions.
+
+## Step 13.2 — Install next-themes, wire up ThemeProvider
+
+**What was done:** Installed `next-themes` and wrapped `{children}` in `app/layout.tsx` with its `ThemeProvider` (`attribute="class"`, `defaultTheme="system"`, `enableSystem`, `disableTransitionOnChange`), matching the `.dark`-class convention already in `app/globals.css` from step 13.1. Added `suppressHydrationWarning` to `<html>`, which this specific setup requires.
+
+**Why no wrapper component.** The commonly-documented shadcn pattern wraps `next-themes`'s `ThemeProvider` in a small local `"use client"` component before using it in the root layout. Checked whether that's actually necessary here: `next-themes` already ships its `ThemeProvider` from a client-marked entry point, so Next.js treats the boundary correctly without a wrapper — the pattern exists mainly for typing/reuse convenience across multiple use sites. This app has exactly one root layout and fixed provider props that never vary, so a wrapper would be indirection with nothing to justify it. Imported and used directly instead.
+
+**Why `suppressHydrationWarning` is necessary, not just conventional:** `next-themes` sets the theme class on `<html>` via a small blocking script that runs *before* React hydrates — that's specifically what avoids a flash of the wrong theme on first paint (a light background flashing before dark mode kicks in, for instance). But it means the server-rendered HTML and the client's first real render can legitimately differ on that one class, which React would otherwise report as a hydration mismatch. `suppressHydrationWarning` on that one element tells React this specific, expected difference isn't a bug — it doesn't disable hydration warnings anywhere else in the tree.
+
+**Verification:** `npm run build` + `npx tsc --noEmit` + `npm run lint` all clean. Rather than trusting the config was applied correctly from the source alone, fetched the actual server-rendered HTML and found the compiled setup script's literal argument list — `("class","theme","system",null,["light","dark"],null,true,true)` — confirming `attribute="class"`, `storageKey="theme"`, `defaultTheme="system"`, the theme list, and `enableSystem` all compiled through exactly as configured. Didn't build a browser-driven click-test for the toggle interaction itself at this step — `next-themes` is a mature, extremely widely-used library and the setup mechanism (not custom logic) is what was being verified here; the actual clickable toggle doesn't exist as a UI element yet regardless (that's step 13.3).
+
+**Commands run:**
+```
+npm install next-themes    # → next-themes@0.4.6, no peer-dependency warnings
+
+npm run build      # succeeded
+npx tsc --noEmit   # clean
+npm run lint       # clean
+
+nohup npm run dev > /tmp/nextdev6.log 2>&1 & disown
+curl -s http://localhost:3000 -o /tmp/page6.html
+grep -o '<html[^>]*>' /tmp/page6.html
+grep -B2 -A2 "next-themes" /tmp/page6.html
+# → found the compiled setup script:
+#   ...})("class","theme","system",null,["light","dark"],null,true,true)
+
+pkill -f "next-server"; pkill -f "next dev"
+rm -f /tmp/page6.html /tmp/nextdev6.log
+rm -rf .next
+```
+
+**How this moves the build forward:** the theme mechanism is fully wired and verified — step 13.3 just needs to build a UI control that calls `next-themes`'s `useTheme()` hook; no provider/setup plumbing left to figure out.
+
+## Step 13.3 — Build ThemeToggle
+
+**What was done:** Added shadcn's `ToggleGroup`/`Toggle` primitives (`components/ui/toggle-group.tsx`, `toggle.tsx`, via `npx shadcn add toggle-group`) rather than hand-rolling three `<button>` elements — per the `interface-design` skill's native→primitive→hand-roll hierarchy, a mutually-exclusive button group is exactly what this primitive exists for, and it already ships keyboard navigation and ARIA correctly. Built `components/shared/theme-toggle.tsx` on top of it: a 3-option (Light/Dark/System) segmented control wired to `next-themes`'s `useTheme()`, with the active segment styled to the confirmed direction (filled with `--primary`/`--primary-foreground` — the Khata brand rose — not shadcn's generic muted-background pressed state).
+
+**A real API difference caught before writing broken code:** almost assumed shadcn's `ToggleGroup` followed Radix's familiar API (`type="single"`, scalar `value`/`onValueChange`) without checking — but this project's `components.json` uses Base UI, not Radix (a decision made back in step 2), and Base UI's `ToggleGroup` has a meaningfully different shape: `value`/`defaultValue`/`onValueChange` all work with *arrays* of pressed values (even in single-select mode, toggled via a `multiple` boolean rather than a `type` prop), and each item's identity comes from a `value` prop, not `type`. Checked the actual `.d.ts` files in `node_modules/@base-ui/react` before writing the component, rather than assuming API parity with the more commonly-documented Radix version.
+
+**A second gotcha: `next-themes`'s hydration-safety requirement.** `useTheme()`'s `theme` value is `undefined` until after the component mounts on the client — the server genuinely cannot know a visitor's stored preference. Naively rendering the toggle's active state immediately risks either a hydration mismatch or a visible "pops from nothing-selected to the real value" flash right after load. The standard fix is a `mounted` boolean, but the obvious `useState` + `useEffect(() => setMounted(true), [])` implementation tripped a real lint rule: `react-hooks/set-state-in-effect` (`npm run lint` caught it, didn't just trust the pattern because it's commonly seen in tutorials) — calling `setState` synchronously inside an effect causes an avoidable extra render. This specific case is one of the few legitimate exceptions to that rule (delaying client-only rendering to dodge a hydration mismatch), but rather than silencing the lint rule with a disable comment, used the React-idiomatic primitive the rule's own message points at: `useSyncExternalStore`. Extracted this as `hooks/use-mounted.ts` — a genuinely reusable pattern (not specific to the theme toggle), placed in the `hooks/` folder that was set up back in Phase 0 specifically for cases like this, rather than inlined into one component.
+
+**Problem avoided:** shipping a component that would have crashed at runtime (wrong Base UI prop shapes) if the Radix API had been assumed instead of checked, and a lint violation that would have needed silencing rather than a clean fix.
+
+**Verification:** `npm run build` + `npx tsc --noEmit` + `npm run lint` all clean (the lint failure above was caught and fixed *before* this passing state, not skipped). Full behavioral verification (does clicking it actually change the theme) deferred to step 13.4, where `ThemeToggle` gets permanently mounted in the real app shell — avoided a throwaway temporary mount now that would just need reverting.
+
+**Commands run:**
+```
+npx --yes shadcn@latest add toggle-group -y
+# → Created components/ui/toggle.tsx, components/ui/toggle-group.tsx
+
+# Checked the actual Base UI API before writing the component:
+find node_modules/@base-ui/react -iname "*.d.ts" -path "*toggle-group*"
+cat node_modules/@base-ui/react/toggle-group/ToggleGroup.d.ts
+cat node_modules/@base-ui/react/toggle/Toggle.d.ts
+# → confirmed: value/onValueChange are arrays, items use a `value` prop
+
+npm run build      # succeeded
+npx tsc --noEmit   # clean
+npm run lint
+# → 1 error: react-hooks/set-state-in-effect in theme-toggle.tsx
+
+# (extracted hooks/use-mounted.ts using useSyncExternalStore instead of
+#  useState+useEffect; updated theme-toggle.tsx to use it)
+
+npm run build      # succeeded
+npx tsc --noEmit   # clean
+npm run lint       # clean
+```
+
+**How this moves the build forward:** step 13.4 (the app shell) just needs to render `<ThemeToggle />` somewhere in the header — the component itself, its styling, and its wiring to `next-themes` are all done and verified.
+
+## Step 13.4 — Build the app shell (header, nav, theme toggle)
+
+**What was done:** Built `components/shared/app-header.tsx` (a Server Component — the header container, icon mark, layout) and `components/shared/nav-links.tsx` (a Client Component — Dashboard/Orders links with active-route styling), then mounted `<AppHeader />` above `{children}` in `app/layout.tsx`, wrapped in a `<main>` with consistent page padding.
+
+**Why the nav links needed their own Client Component, not just inline in the header:** highlighting which nav link is "active" requires knowing the current route, and Next.js layouts don't receive the pathname as a prop — `usePathname()` is a client-only hook. Rather than making the whole header a Client Component for this one detail, only `NavLinks` carries `"use client"`; the header container, the icon mark, and the overall layout stay server-rendered. A concrete, real instance of the Server/Client split principle from `plan.md`, not just a description of it.
+
+**The brand slot is icon-only, deliberately.** The actual product name ("Khata" vs. staying with the generic "Production Analytics Dashboard" framing from the task) is a decision the user hasn't made yet — flagged twice now (once when it came up during the design checkpoint, once again when `layout.tsx`'s metadata briefly said "Khata" before being caught and reverted in step 13.1). Committing a wordmark into the header now would be deciding that question silently a third time. Used a ledger-themed icon (`lucide-react`'s `NotebookText`) instead — visually on-direction without presuming the name, and it doubles as a home link (`href="/"`, `aria-label="Dashboard home"`) rather than being purely decorative.
+
+**A currently-expected rough edge, not a bug:** the "Orders" nav link points at `/orders`, which doesn't exist yet — Phase 3 builds it. Clicking it right now 404s. Didn't build a stub page to paper over this; a placeholder route built just to avoid a temporary 404 during incremental development would be exactly the kind of code that looks meaningful but isn't actually doing anything.
+
+**Verification:** `npm run build` + `npx tsc --noEmit` + `npm run lint` all clean. Started the dev server and fetched the real rendered HTML rather than trusting the component source: confirmed the header/icon/nav structure is present, confirmed the *actual conditional logic* fired correctly — the Dashboard link (matching the current `/` route) rendered with `border-primary text-foreground`, the Orders link rendered with the inactive `text-muted-foreground` treatment — and confirmed all three `ThemeToggle` items render with correct `aria-label`s and the `data-[state=on]:bg-primary` override baked into their class list. Checked the dev server log for errors/warnings — none. Being precise about what this does and doesn't confirm: without browser automation available, actually clicking the toggle and watching the theme repaint live isn't something this checked directly — what's confirmed is that every piece it depends on (the `next-themes` script mechanism verified in step 13.2, the component wiring verified here) is individually correct, which is as far as static/server-rendered inspection can go.
+
+**Commands run:**
+```
+npm run build      # succeeded
+npx tsc --noEmit   # clean
+npm run lint       # clean
+
+nohup npm run dev > /tmp/nextdev7.log 2>&1 & disown
+curl -s http://localhost:3000 -o /tmp/page7.html
+
+grep -o '<a [^>]*>' /tmp/page7.html
+# → confirmed: logo link (aria-label="Dashboard home"), Dashboard link
+#   with border-primary text-foreground (active), Orders link with
+#   text-muted-foreground (inactive)
+
+grep -o 'data-slot="toggle-group-item"[^>]*' /tmp/page7.html
+# → confirmed: 3 items, aria-label="Light"/"Dark"/"System", each with
+#   data-[state=on]:bg-primary data-[state=on]:text-primary-foreground
+
+grep -i "error\|warn" /tmp/nextdev7.log   # → none
+
+pkill -f "next-server"; pkill -f "next dev"
+rm -f /tmp/page7.html /tmp/nextdev7.log
+rm -rf .next
+```
+
+**How this moves the build forward:** Phase 2's app-shell prerequisite work is done. Every page built from here — the dashboard (step 14 onward), and later the orders page — renders inside this shell automatically, with working navigation and a working theme toggle already in place, rather than needing shell/chrome bolted on after the fact.

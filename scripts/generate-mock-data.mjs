@@ -66,10 +66,13 @@ function round2(n) {
 function writeJson(filename, data) {
   fs.writeFileSync(path.join(DATA_DIR, filename), JSON.stringify(data, null, 2) + "\n");
 }
-// Matches lib/format.ts's formatCurrency convention (৳ + Western digits,
-// not Intl's locale-driven currency style — see that file for why).
+// Matches lib/format.ts's formatCurrency convention (৳ + lakh-grouped
+// Western digits — see that file for why).
 function formatTaka(n) {
-  return "৳" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return (
+    "৳" +
+    n.toLocaleString("bn-BD", { numberingSystem: "latn", minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  );
 }
 
 const FIRST_NAMES = [

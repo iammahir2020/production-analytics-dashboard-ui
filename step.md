@@ -46,8 +46,12 @@ Each step is a single, reviewable unit of work. Check it off after reviewing, th
 
 🎨 **Design checkpoint — first UI phase starts next.** Everything up to here has been infrastructure with no visible UI. Before building `app/page.tsx` and its components, the look needs to be deliberate: a real visual direction (type, color, spacing, density), not default shadcn-out-of-the-box or a generic dashboard template — the goal is a UI nobody mistakes for unreviewed AI output. If design skill files have been added, this is where they get applied; if not, I'll state the direction explicitly before writing the first component so it can be reviewed before it spreads across the rest of the build.
 
-## Phase 2 — Dashboard Page (Server Component shell)
+## Phase 2 — App Shell & Dashboard Page (Server Component shell)
 
+- [x] 13.1. Apply the confirmed Khata design tokens (`.interface-design/system.md`) to `app/globals.css` — both themes' colors, Hanken Grotesk font — replacing shadcn's neutral Nova preset values
+- [x] 13.2. Install `next-themes`; wrap the root layout with `ThemeProvider` (class-based, matching the `.dark` convention already in `app/globals.css`), 3-state (light/dark/system)
+- [x] 13.3. Build `ThemeToggle` (Client Component — needs `next-themes`'s `useTheme` hook)
+- [x] 13.4. Build the shared app shell in `app/layout.tsx`: header with Dashboard/Orders navigation links + `ThemeToggle`, styled to the confirmed Khata direction
 - [ ] 14. Build `app/page.tsx` as a Server Component: parallel-fetch summary stats, revenue timeseries, recent orders, recent activity; pass down as props
 - [ ] 15. Build `SummaryCards` (revenue, orders, active customers, conversion rate) — presentational, server-rendered
 - [ ] 16. Build `RevenueChart` (Client Component, Recharts) — receives pre-shaped data as props

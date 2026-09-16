@@ -31,6 +31,7 @@ That last one is unusual and worth taking seriously. They explicitly say candida
 | Mock data | Local JSON + a thin async service layer | No backend to stand up, but still forces a real API-shaped boundary — see below |
 | Filter state | URL search params via native `useSearchParams` / `router.push` — **no `nuqs`** | Locked decision: zero extra dependency, and explaining *why not* a library is itself a clean README talking point — see the state management section |
 | Testing | Jest + React Testing Library, via Next.js's built-in `next/jest` config | Zero-config path Next.js documents itself; covers the service layer/filtering logic and a couple of presentational components — deliberately basic, not full coverage or e2e |
+| Theme toggle | `next-themes`, 3-state (light/dark/system) | shadcn's tokens already define both palettes; a hand-rolled toggle reliably gets one thing wrong — a flash of the wrong theme before hydration, since the server doesn't know the stored preference yet. `next-themes` solves that with a small blocking script, which is fiddly enough to get right by hand that it clears the bar for a new dependency |
 | Deployment | Vercel | Zero-config for Next.js, free tier is enough |
 
 ## Mock data — the "proper service layer" is the point, not the data source
