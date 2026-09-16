@@ -35,6 +35,8 @@ That last one is unusual and worth taking seriously. They explicitly say candida
 
 ## Mock data — the "proper service layer" is the point, not the data source
 
+**Market/locale: Bangladesh, not the US.** Currency is BDT (৳), customer names are Bangladeshi, and product pricing reflects real Bangladesh electronics-retail figures (not a USD-to-BDT conversion of some other number — local retail pricing doesn't track FX rates linearly). `formatCurrency` in `lib/format.ts` builds `৳` + Western digits manually rather than relying on `Intl`'s currency style, since neither `en-BD`/`en-US` (no ৳ glyph in their ICU data — falls back to the literal code `"BDT"`) nor `bn-BD` (has the glyph, but converts digits to Bengali numerals too, inconsistent next to an English-language UI) give the conventional look real Bangladesh apps (bKash, Daraz BD) actually use.
+
 The task says "use a JSON dataset or mock API." Don't just import JSON directly into components — that's the exact anti-pattern they call out ("do not hardcode data directly inside UI components").
 
 Build a thin service layer that *behaves* like a real API even though it isn't one:

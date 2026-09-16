@@ -29,17 +29,18 @@ Each step is a single, reviewable unit of work. Check it off after reviewing, th
 
 ## Phase 1 — Types, Mock Data, Service Layer
 
-- [ ] 6. Define TypeScript types: `Order`, `Customer`, `Activity`, `AnalyticsSummary`, `RevenuePoint` (`lib/types/`)
-- [ ] 7. Write a mock-data seed script generating datasets into `lib/data/`
-  - [ ] 7a. Customers dataset (~50)
-  - [ ] 7b. Orders dataset (~200, over the last 90 days, referencing customer ids; statuses: pending/processing/completed/cancelled/refunded)
-  - [ ] 7c. Activity dataset (~30 events)
-- [ ] 8. Build `lib/api/client.ts` — `mockFetch` wrapper with artificial delay + configurable fail rate
-- [ ] 9. Build `lib/api/customers.ts` — `getCustomers()`, active-customer count
-- [ ] 10. Build `lib/api/orders.ts` — `getOrders(filters)`, `getOrderById(id)`
-- [ ] 11. Build `lib/api/analytics.ts` — `getSummaryStats()` (revenue, orders, active customers, conversion rate), `getRevenueTimeseries()`
-- [ ] 12. Build `lib/api/activity.ts` — `getRecentActivity()`
-- [ ] 13. Build `lib/format.ts` — currency/date formatting helpers
+- [x] 6. Define TypeScript types: `Order`, `Customer`, `Activity`, `AnalyticsSummary`, `RevenuePoint` (`lib/types/`)
+- [x] 7. Write a mock-data seed script generating datasets into `lib/data/`
+  - [x] 7a. Customers dataset (~50)
+  - [x] 7b. Orders dataset (~200, over the last 90 days, referencing customer ids; statuses: pending/processing/completed/cancelled/refunded)
+  - [x] 7c. Activity dataset (~30 events)
+  - [x] 7d. Total-visitors figure (`mock-analytics.json`) — added during step 11, appended after 7a–7c so the RNG sequence for those was undisturbed; needed as the denominator for conversion rate
+- [x] 8. Build `lib/api/client.ts` — `mockFetch` wrapper with artificial delay + configurable fail rate
+- [x] 9. Build `lib/api/customers.ts` — `getCustomers()`, active-customer count
+- [x] 10. Build `lib/api/orders.ts` — `getOrders(filters)`, `getOrderById(id)`
+- [x] 11. Build `lib/api/analytics.ts` — `getSummaryStats()` (revenue, orders, active customers, conversion rate), `getRevenueTimeseries()`
+- [x] 12. Build `lib/api/activity.ts` — `getRecentActivity()`
+- [x] 13. Build `lib/format.ts` — currency/date formatting helpers
 
 🔖 **Suggested commit point** — types, mock data, and the full service layer are in place.
 
