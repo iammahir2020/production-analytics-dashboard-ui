@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { Search, X } from "lucide-react";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useOrderFiltersUrl } from "@/hooks/use-order-filters";
-import { DateRangeFilter } from "@/components/orders/date-range-filter";
 import { ORDER_STATUS_STYLES } from "@/components/orders/order-status";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,6 +13,21 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ORDER_STATUSES } from "@/lib/types/order";
 
 const SEARCH_DEBOUNCE_MS = 400;
+
+// react-day-picker (pulled in by Calendar, which only DateRangeFilter
+// uses) measured at ~252KB uncompressed in /orders's first-load JS — a
+// fifth of that route's bundle, for a popover most loads never open.
+// next/dynamic defers it to its own on-demand chunk, fetched only when
+// the user actually clicks the trigger; ssr: false is safe since this
+// whole component already only renders on the client (FiltersBar is
+// "use client") and the popover has nothing to show before hydration
+// anyway. The loading fallback matches the trigger's own resting size
+// (Button's h-8, FiltersBarSkeleton's w-44) so there's no layout shift
+// while the chunk downloads on a slow connection.
+const DateRangeFilter = dynamic(
+  () => import("@/components/orders/date-range-filter").then((mod) => mod.DateRangeFilter),
+  { ssr: false, loading: () => <Skeleton className="h-8 w-full sm:w-44" /> }
+);
 
 const STATUS_OPTIONS = [
   { value: "all", label: "All statuses" },

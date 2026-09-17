@@ -2097,4 +2097,65 @@ pkill -9 -f "next-server"; pkill -9 -f "next dev"
 # set back to 0.5 by the user in their own IDE, left as-is
 ```
 
+## Phase 7 — Performance Pass (steps 44–49b)
+
+**What was done:** a real audit against the actual code, not a speculative pass adding memoization "just in case" — went through every client component and hook, `app/page.tsx` and `app/orders/[id]/page.tsx`'s fetch structure, and `package.json`, checking each one against a concrete question rather than a checklist. Found and fixed one real issue; everything else was already correct, and that's recorded too — a "nothing to fix here, and here's why" is as much a decision as a fix.
+
+**44–45. `useMemo`/`useCallback` audit — nothing added.** Every chart component (`RevenueChart`, `OrdersChart`, `StatusDonut`) receives its data pre-shaped from a Server Component and renders it straight through — there's no derived computation happening client-side to memoize. `StatusDonut`'s `chartConfig` is already a module-level constant (built once at import time, not per render), same as `FiltersBar`'s `STATUS_OPTIONS`. `OrderRow` was already wrapped in `React.memo` with a comment explaining why it doesn't also need `useCallback` for its own click handler (nothing downstream is memoized to protect). `useOrderFiltersUrl`'s `setFilters`/`setFilter`/`clearFilters` were already `useCallback`-wrapped from the date-range-filter work two sessions ago. Checked, not assumed — read every "use client" file in the repo (`grep -rln "use client"`) and every `useState`/`useEffect`/`useMemo`/`useCallback` call site (`grep -rn`) before concluding this.
+
+**46. Duplicate API calls / unnecessary re-renders — none found.** Every dashboard section fetches a distinct, non-overlapping slice of data (confirmed by grepping every `await getX()` call site across `components/dashboard` and `components/orders`) — no two sections call the same function. `app/orders/[id]/page.tsx` already parallelizes `getCustomerById`/`getActivityForOrder` with `Promise.all` (both only depend on the order that already resolved), so there's no accidental waterfall there either.
+
+**47. Lazy-loading — one real win, applied.** Measured first, via Next's own `.next/diagnostics/route-bundle-stats.json` after a production build: `react-day-picker` (pulled in by `Calendar`, used only by `DateRangeFilter`) was ~252KB uncompressed and present in the first-load JS of *both* `/orders` (1,314,644 bytes) and `/orders/[id]` (1,312,609 bytes) — a fifth of each route's bundle, for a popover most page loads never open. `/orders/[id]` doesn't even render `FiltersBar`; it was only there because Turbopack hoists modules shared between sibling routes into a common chunk.
+
+Fixed by wrapping `DateRangeFilter` in `next/dynamic({ ssr: false })` inside `filters-bar.tsx`, with a `Skeleton` loading fallback sized to match the trigger's resting height (`h-8 w-full sm:w-44`, matching `FiltersBarSkeleton`'s own sizing) so there's no layout shift while the chunk downloads. `ssr: false` is safe here since `FiltersBar` is already `"use client"` — the popover has nothing to render before hydration regardless.
+
+Verified, not assumed: rebuilt, and grepped every chunk in the fresh `firstLoadChunkPaths` list for the string `DayPicker`/`react-day-picker` — zero matches, confirming it's now a genuinely separate on-demand chunk rather than just reshuffled. Then a real Playwright MCP session against the production server: opened the popover (chunk loaded on click, calendar rendered both months correctly), picked a start day (Apply/Clear went from disabled to enabled, confirming the seed-then-complete flow from the earlier date-range work still works unchanged), picked an end day, clicked Apply, and confirmed the URL updated to `?from=2026-09-08&to=2026-09-15`. Also navigated straight to `/orders/[id]` to confirm it still loads correctly now that it no longer shares that chunk at all.
+
+Nothing else was a real dynamic-import candidate: Recharts is already needed for the compact chart view itself (not just the expanded dialog), so lazy-loading it would just move the same unavoidable cost around rather than removing it — and `ExpandableChart`'s dialog content was already confirmed (this session's error-state work, and originally when the component was built) to not mount into the DOM until the dialog opens, so it isn't paying an eager cost either.
+
+**48. Unused dependencies — audited, none removed.** Checked every entry in `package.json` against actual `grep -rn` import usage. `cn` (the package, not the Tailwind convention) is real and used — `lib/utils.ts` re-exports it, and every `components/ui/*` primitive imports `cn` from it; this is shadcn's Nova-preset convention, not leftover scaffolding. `shadcn` itself is never imported at runtime (it's the CLI, used via `npx shadcn add …`) — technically belongs in `devDependencies`, but that's exactly where `npx shadcn init` places it by default, and reclassifying it has zero effect on the shipped bundle, so left as-is rather than churn for its own sake. Every other dependency (`date-fns`, `lucide-react`, `recharts`, `react-day-picker`, `next-themes`, `tw-animate-css`, `@base-ui/react`, `class-variance-authority`) has confirmed real import sites.
+
+**49b. Revisited the per-section Suspense architecture — no restructuring, and here's the reasoning.** The original concern (`learn.md`'s "Step 14, revised" entry) was about sections popping in at visibly different times reading as janky. The two things that would actually cause that have both already been independently fixed earlier this session, for unrelated reasons: skeleton sizing now matches real content almost exactly (the skeleton-vs-real audit), so a section resolving no longer causes a layout shift — it's a content swap within a stable box, not a jump. And `generateRandomDelay()`'s range is 1–1000ms (the user's own edit, down from the original 2000ms ceiling), so the spread between the fastest- and slowest-resolving section is now well under a second rather than up to two.
+
+Re-confirmed with a fresh streaming check against the current code rather than assuming the old measurement still holds: `curl -s -o /tmp/dash.html -w "TTFB: %{time_starttransfer}s total: %{time_total}s\n" http://localhost:3000` → **TTFB 22ms, total 971ms** — consistent with one section landing right at the ~1000ms ceiling while the shell itself still flushes near-instantly. All six section labels (`Overview`, `Charts`, `Order status`, `Top products`, `Recent orders`, `Recent activity`) present in the streamed payload, confirming every section still streams independently rather than one slow fetch blocking the rest. No code change made — the architecture was already right, and the two things that could have made it feel wrong were both already resolved as side effects of other work, not because this check overlooked them.
+
+**Verification:** `npx tsc --noEmit`, `npm run lint`, `npm run build` all clean after the `next/dynamic` change; production server (`npm run start`) used for the bundle measurement and the Playwright walkthrough, dev server for the streaming re-check.
+
+**Commands run:**
+```
+npm run build   # baseline, before the fix
+python3 -c "import json; d = json.load(open('.next/diagnostics/route-bundle-stats.json')); ..."
+# → /orders 1,314,644 bytes first-load JS, /orders/[id] 1,312,609 — both
+#   include a ~252KB chunk containing DayPicker/react-day-picker
+
+grep -rl "DayPicker\|react-day-picker" .next/static/chunks/*.js
+# → exactly one chunk, confirmed present in both routes' firstLoadChunkPaths
+
+# fixed: DateRangeFilter wrapped in next/dynamic({ ssr: false }) in filters-bar.tsx
+npx tsc --noEmit && npm run lint   # clean
+rm -rf .next && npm run build      # clean rebuild
+
+python3 -c "... same route-bundle-stats.json check ..."
+# → /orders 1,240,856 bytes (-73,788), /orders/[id] 1,236,610 (-75,999)
+# → grep for DayPicker/react-day-picker across every route's
+#   firstLoadChunkPaths: zero matches, any route
+
+npm run start &
+# Playwright MCP: navigate /orders → snapshot (Date range button present,
+#   not stuck loading) → click it → snapshot (calendar mounted, both
+#   months, Apply/Clear disabled) → click Sep 8 → click Sep 15 → click
+#   Apply → URL became /orders?from=2026-09-08&to=2026-09-15
+# navigate /orders/ord_0166 → loads correctly, no shared-chunk dependency
+
+npm run dev &
+curl -s -o /tmp/dash.html -w "TTFB: %{time_starttransfer}s total: %{time_total}s\n" http://localhost:3000
+# → TTFB: 0.022049s   total: 0.970803s
+grep -o 'Overview\|Recent orders\|Recent activity\|Order status\|Top products\|Charts' /tmp/dash.html | sort -u
+# → all six present
+
+npm test   # unaffected, all still pass
+```
+
+**How this moves the build forward:** a real, measured ~74KB reduction in first-load JS on both orders routes — not a speculative optimization, found by reading Next's own build diagnostics rather than guessing at what "felt heavy." Equally important, the audit confirmed the rest of the codebase's memoization, data-fetching, and dependency choices were already sound going into this phase — largely because they'd already been built with these questions in mind (`OrderRow`'s memo comment, the parallel `Promise.all` in order details, the shared single fetch in `ChartsSection`) rather than needing a separate cleanup pass now. Phase 8 (Accessibility) is next.
+
 **How this moves the build forward:** two real bugs fixed — one purely visual (a missing `h-full`/`justify-center` on a shared fallback component, now correctly sized in every context that uses it), one architectural (an error-isolation gap that exactly mirrored a loading-isolation bug already fixed once before, now closed the same way with the same shared component). Both were found by actually forcing and observing failures end to end, not by reading the code and assuming it was fine — consistent with this session's established discipline, and `SectionBoundary` is now confirmed to correctly protect both the loading *and* the error case, on both pages, not just the page it was originally built for.

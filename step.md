@@ -167,13 +167,13 @@ Each step is a single, reviewable unit of work. Check it off after reviewing, th
 
 ## Phase 7 — Performance Pass
 
-- [ ] 44. Audit and add `useMemo` only where real derived/expensive computation happens (document what was and wasn't memoized, and why)
-- [ ] 45. Audit and add `useCallback` only where paired with a memoized child (`OrderRow`) or a debounced handler
-- [ ] 46. Check for duplicate API calls / unnecessary re-renders; fix any found
-- [ ] 47. Evaluate lazy-loading (`next/dynamic`) for any heavy, non-critical client component; apply only where it gives a real benefit, skip otherwise
-- [ ] 48. Audit `package.json` for unused/unnecessary dependencies; remove anything not actually in use
-- [ ] 49. Record memoization, lazy-loading, and dependency decisions in the decision log
-- [ ] 49b. **Revisit the per-section Suspense architecture** (decided at step 14, deliberately kept for now): check whether sections popping in at different times reads as janky once real skeletons exist, and whether the streaming win still holds with uniform ~500ms delays. Restructure only if there's a real problem — see `learn.md`'s "Step 14, revised" entry for the full reasoning and the rejected alternatives (`Promise.all`, `Promise.allSettled`)
+- [x] 44. Audit and add `useMemo` only where real derived/expensive computation happens (document what was and wasn't memoized, and why) — audited, nothing needed (see learn.md)
+- [x] 45. Audit and add `useCallback` only where paired with a memoized child (`OrderRow`) or a debounced handler — already correctly done in earlier phases
+- [x] 46. Check for duplicate API calls / unnecessary re-renders; fix any found — none found
+- [x] 47. Evaluate lazy-loading (`next/dynamic`) for any heavy, non-critical client component; apply only where it gives a real benefit, skip otherwise — `DateRangeFilter`/react-day-picker lazy-loaded (~74KB first-load JS saved on both orders routes, measured)
+- [x] 48. Audit `package.json` for unused/unnecessary dependencies; remove anything not actually in use — audited, nothing unused
+- [x] 49. Record memoization, lazy-loading, and dependency decisions in the decision log
+- [x] 49b. **Revisit the per-section Suspense architecture** — re-confirmed with a fresh streaming measurement; no restructuring needed (see learn.md for why)
 
 🔖 **Suggested commit point** — performance pass complete, decisions documented.
 
