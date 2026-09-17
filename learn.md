@@ -1630,3 +1630,98 @@ rm -rf .next; rm -f /tmp/o-*.html /tmp/orders-pgsize.log
 ```
 
 **How this moves the build forward:** the sticky-cell abstraction now correctly models "which edge(s) does this cell freeze against" as its own explicit concept rather than assuming "leading column" was the only kind of sticky cell that would ever exist — worth remembering if a future table needs the same pattern. The rows-per-page control and the Suspense-boundary tradeoff reasoning (discrete click vs. continuous typing) are both documented here and in the code, not just shipped silently.
+
+## Phase 4 — Order Details (steps 31–34, built in one pass)
+
+**What was asked.** The whole phase in one go: a dedicated `/orders/[id]` route (already locked into `plan.md` as a route, not a modal), its loading state, a presentational `OrderDetailsView` (customer info, line items, status, timeline), and a link from each orders-table row into it.
+
+**What the route actually fetches, and why it's three calls, not one.** `Order` (`lib/types/order.ts`) only ever carried `customerId`/`customerName` — no email, join date, or lifetime spend, all of which "customer info" needs. So `app/orders/[id]/page.tsx` fetches the order first (`getOrderById`, already existed from Phase 1 but never called from any route until now), then — once the order confirms the customer id is real — fetches the customer (`getCustomerById`, new) and that order's activity log entries (`getActivityForOrder`, new) **in parallel** via `Promise.all`, since neither depends on the other, only on the order that already resolved. Both new functions are general-purpose lookups with nullable/empty return shapes (`Customer | null`, `Activity[]`), not hardcoded to "the id will definitely exist" — checked directly against the generated JSON that every `order.customerId` does resolve to a real customer (0 orphans across all 200 orders) and every line-item's `quantity × unitPrice` sums to exactly `order.total` (0 mismatches), so nothing here is invented to cover a gap that doesn't actually exist in the data — but the code still narrows the nullable customer explicitly (`if (!customer) notFound()`) rather than asserting past a type that says it can be null.
+
+**The timeline is built from what the mock data actually logged, not synthesized to look complete.** The generator only ever wrote **29** activity entries total, covering **25** of the 200 orders (max 2 each: `order_created` + one `order_status_changed`/`refund_issued`). Building a timeline entirely from `getActivityForOrder()` would leave 175 of 200 orders with an empty, broken-looking feature. Instead, the timeline always opens with **"Order placed"** at `order.createdAt` — a real fact every single order carries, not fabricated — followed by whatever real, timestamped activity entries exist for that order, sorted chronologically (oldest first, the reverse of the dashboard feed's newest-first convention, because a timeline reads top-to-bottom as "what happened, in order"). For an order with no further logged event, that's a valid one-entry timeline, not a bug: inventing a matching "marked as completed" event with a made-up timestamp for the other 175 orders would be exactly the fabricated-data problem this project has avoided everywhere else (the AOV denominator, the deltas that don't exist for `activeCustomers`/`conversionRate`). Verified against three real orders spanning all three shapes: `ord_0023` (completed, zero activity → one-entry timeline), `ord_0071` (completed, zero activity, 3 line items), `ord_0127` (refunded, one real `refund_issued` entry → two-entry timeline, correctly ordered after "Order placed" since its timestamp is later).
+
+**Linking each row: a real `<Link>`, not a hand-rolled clickable `<div>`, plus a mouse-friendly whole-row click.** A `<tr>` can't itself be an `<a>` around `<td>`s — that's invalid table structure — so `OrderRow` (`components/orders/order-row.tsx`) uses the two-part pattern real tables actually use: the order id itself is wrapped in a genuine `next/link` `<Link>` (keyboard-focusable, works with middle-click/open-in-new-tab, has a real `href` a screen reader announces), and the whole `<tr>` also gets an `onClick` (`router.push`) plus `cursor-pointer`/`hover:bg-muted/40` so clicking anywhere in the row navigates, the way Linear/Stripe-style tables behave. The click handler guards against the redundant double-navigation this creates (`if (event.target.closest("a")) return`) when the click actually landed on the Link, since the Link's own handler already navigates. `OrderRow` picked up `"use client"` for this (it needed `useRouter`) — it was already always bundled as client code via `OrdersTable`'s own `"use client"` boundary, but the file didn't say so itself before this; now it does, matching every other hook-using file in the project. The sticky leading cell's `bg-card` (needed so scrolled-under content doesn't show through it) meant the row's hover background wouldn't reach that column on its own — fixed by adding `group`/`group-hover:bg-muted/40` so the sticky column visually participates in the same hover state as the rest of the row, since that's exactly the column that stays visible during a horizontal scroll on mobile.
+
+**Real, documented platform limitation found and left honestly in place: `notFound()` doesn't reliably return an HTTP 404.** Checked directly, not assumed: `curl -D -` against `/orders/ord_9999` (an id that doesn't exist) returns `200 OK` with the not-found UI correctly rendered in the body — confirmed both with and without `app/orders/[id]/loading.tsx` present (temporarily removed it, rebuilt, re-tested, then restored it), ruling out "the loading.tsx Suspense wrapper is doing this" as the cause. It's simply how the App Router's streaming model works by default, per Next's own bundled docs (`node_modules/next/dist/docs/01-app/03-api-reference/03-file-conventions/not-found.md`): "Next.js will return a `200` HTTP status code for streamed responses, and `404` for non-streamed responses" — and a real 404 status would require checking for existence *before* any byte streams, via `proxy` (an experimental Cache Components pattern), which is out of scope for a route that's supposed to stay a plain Server Component fetch. `notFound()` is still correct to use here: it renders the right UI and injects a `noindex` meta tag, which is what actually matters for a client-rendered dashboard route. Documented as a standing lesson in `step.md` rather than silently shipped past, since it's exactly the kind of platform nuance AGENTS.md's "this Next.js has breaking changes, read the docs" warning is there for.
+
+**Verification — real production server, real ids, values checked against independent Node computation, not the UI's own math.**
+- `tsc --noEmit` (via `next build`, since `PageProps<"/orders/[id]">` doesn't exist until a build/dev run generates it) and `next lint` both clean (same one pre-existing, already-flagged `client.ts` warning)
+- `next build`: `/orders/[id]` registers as a dynamic (`ƒ`) route alongside `/` and `/orders`
+- Independently computed in Node against the raw JSON before checking the rendered page: confirmed 0 of 200 orders have an orphaned `customerId`, 0 of 200 have an `items[]` sum that doesn't exactly equal `order.total`, and picked three real orders spanning every shape worth checking — multi-item (`ord_0071`, 3 distinct products), a duplicate-product-name order (`ord_0127`, two separate "Wireless Mouse" line items at different quantities — confirmed the row `key` including `index` doesn't collide), and a zero-activity order (`ord_0023`)
+- Production server (`npm run start`) + `curl`, RSC-comment-stripped and checked for real formatted values, not just structural markup: order id, customer name, email, lifetime spend (`৳1,53,600.00`, lakh-grouped), lifetime order count, Active/Inactive label, every line item's product name/qty/unit price/subtotal, the order total, and the placed date — all matched the independently computed figures exactly, for all three orders
+- Confirmed the refund's negative total renders in the same `text-destructive` class as the parenthesized amount (`(৳37,200.00)`) — checked the class and the value are on the *same* element, not just both present somewhere in the page
+- Confirmed the orders-table rows now render real `href="/orders/ord_####"` anchors (grepped `/orders`'s own rendered output), and that the sticky leading cell's existing box-shadow status stripe + hover classes still coexist correctly with the new `<Link>` inside it
+
+**One disclosed limitation, same category as every other `curl`-based check this project has done.** `curl` can't observe hover states, hydration-time behavior, or a genuinely in-flight loading frame — the row's mouse-hover background and the loading skeleton's actual appearance mid-fetch are confirmed correct by reading the code/class logic, not by eyeballing a real browser paint.
+
+**Commands run:**
+```
+npx tsc --noEmit          # fails: PageProps<"/orders/[id]"> doesn't exist
+                           # yet — expected, same as Phase 3's OrdersPage;
+                           # types generate on a build/dev run
+npm run build              # → Compiled successfully, TypeScript clean,
+                           # /orders/[id] listed as a dynamic (ƒ) route
+npm run lint                # clean (1 pre-existing unrelated warning)
+
+node -e '... independently confirm 0/200 orphaned customerId,
+         0/200 items-sum ≠ total mismatches, pick sample order ids ...'
+
+mv "app/orders/[id]/loading.tsx" /tmp/loading-backup.tsx
+npm run build                                 # still builds clean
+npm run start &                                # background
+curl -s -D - http://localhost:3000/orders/ord_9999 | head -2
+# → HTTP/1.1 200 OK (not-found UI in body) — same with loading.tsx absent
+mv /tmp/loading-backup.tsx "app/orders/[id]/loading.tsx"   # restored
+npm run build && npm run start &               # rebuilt with it back
+
+curl -s http://localhost:3000/orders/ord_0071 -o /tmp/ord_0071.html -w "HTTP:%{http_code}\n"
+curl -s http://localhost:3000/orders/ord_0127 -o /tmp/ord_0127.html -w "HTTP:%{http_code}\n"
+curl -s http://localhost:3000/orders/ord_0023 -o /tmp/ord_0023.html -w "HTTP:%{http_code}\n"
+# → all HTTP 200
+
+python3 -c "... strip RSC <!-- --> markers, check every independently
+             computed value is actually present in each response ..."
+# → all OK: order id, customer name/email/spend/orders/active-label,
+#   every line item, order total, placed date, timeline label
+
+grep -o '.\{80\}text-destructive.\{80\}' /tmp/ord_0127.html | grep "37,200"
+# → confirms class + value on the same <td>
+
+curl -s http://localhost:3000/orders -o /tmp/orders_list.html
+grep -o 'href="/orders/ord_[0-9]*"' /tmp/orders_list.html | sort -u
+# → real per-row hrefs present
+python3 -c "... extract first sticky-left <td>, confirm the <a> and the
+             existing box-shadow/hover classes both survived ..."
+
+pkill -9 -f "next-server"
+rm -f /tmp/ord_*.html /tmp/orders_list.html /tmp/*.log
+```
+
+**How this moves the build forward:** Phase 4 — the last data-driven page in `plan.md`'s scope — is complete; every route in the app (`/`, `/orders`, `/orders/[id]`) now has real data, loading, error, and (where relevant) empty states. The `notFound()`/streaming-status finding and the customer-lookup/timeline reasoning are both written into `step.md`'s standing-lessons list so they're available before Phase 5 (testing) rather than rediscovered. One deliberate scope boundary, not acted on unprompted: the dashboard's own `RecentOrdersList` rows weren't linked to `/orders/[id]` the way the orders-page table's `OrderRow` was — step 34 named `OrderRow` specifically. Flagged rather than decided silently either way — addressed immediately after, below.
+
+## Dashboard's Recent orders rows made clickable too, same as the orders-page table
+
+**What was asked.** The `RecentOrdersList` rows (dashboard) should link to `/orders/[id]` the same way `OrderRow` (orders page) now does — the inconsistency flagged at the end of Phase 4.
+
+**Why this couldn't just be "copy OrderRow's onClick into the existing `.map()`."** `RecentOrdersList` is an `async` Server Component that maps straight to `<tr>` JSX inline — no per-row component, no `"use client"`. A hook (`useRouter`, needed for the whole-row click) can't be called inside a `.map()` callback, and can't be called from a Server Component at all. So making these rows clickable meant extracting each row into its own Client Component first — `RecentOrderRow` (`components/dashboard/recent-order-row.tsx`) — the same structural reason `OrderRow` already existed as its own component rather than being inlined in `OrdersTable`.
+
+**The click-navigation logic itself was extracted, not copy-pasted a second time.** With two real call sites now needing the identical href-plus-click-guard behavior, duplicating `OrderRow`'s `handleRowClick` verbatim into the new component would have been exactly the kind of "no single place to adjust" duplication this project has extracted away every other time it's shown up (`StickyLedgerCell`, `SectionHeading`, `Pagination`). Pulled into `hooks/use-order-row-link.ts` — a small hook, not a rendering component, since the two rows' JSX differs (5 plain columns vs. a sticky-date ledger row) and only the navigation logic, not the markup, was actually duplicated. `OrderRow` was refactored to use it too, so the guard-against-double-navigation logic now has exactly one implementation instead of two that could drift.
+
+**Where the real `<Link>` goes differs between the two tables, correctly.** In `OrdersTable`, the order id is the sticky leading column, so the `<Link>` lives there. In `RecentOrdersList`, the sticky leading column is *Date* — order id isn't the row's visually-leading cell here, it's the mono span inside the "Particulars" cell alongside the customer name. So `RecentOrderRow` wraps the whole Particulars cell content (`ord_#### · Customer Name`) in one `<Link>`, not the sticky Date cell — the link goes on the cell that actually identifies the order in each table, not mechanically on "whichever column happens to be sticky."
+
+**The sticky-column hover-sync fix (`group`/`group-hover:bg-muted/40`, from `OrderRow`) was carried over identically** — `RecentOrderRow`'s Date cell has the same `bg-card` opacity problem StickyLedgerCell always has, for the same reason.
+
+**Verification.** `tsc`/`build`/`lint` all clean (build still lists `/`, `/orders`, `/orders/[id]` correctly; same one pre-existing unrelated warning). Production server + `curl` against `/`: exactly 8 unique `href="/orders/ord_####"` links present, matching `RECENT_LIMIT`; confirmed one row's actual markup end to end — the sticky Date cell's box-shadow (`inset 3px 0 0 0 var(--chart-2), inset -1px 0 0 0 var(--border)`) and `group-hover:bg-muted/40` both intact, with a real `<a href="/orders/ord_0166">` wrapping `ord_0166 Imran Kabir` in the Particulars cell; followed that link's target (`/orders/ord_0008`) and confirmed it resolves with `HTTP 200`.
+
+**Commands run:**
+```
+npm run build && npm run lint     # both clean (1 pre-existing warning)
+npm run start &
+curl -s http://localhost:3000/ -o /tmp/dash.html -w "HTTP:%{http_code}\n"
+grep -o 'href="/orders/ord_[0-9]*"' /tmp/dash.html | sort -u   # 8 unique
+python3 -c "... extract the sticky <td> + its following Particulars <td>,
+             confirm box-shadow/hover/link all present together ..."
+curl -s -o /dev/null -w "HTTP:%{http_code}\n" http://localhost:3000/orders/ord_0008
+pkill -9 -f "next-server"
+```
+
+**How this moves the build forward:** the dashboard and the orders page now share one consistent row-click affordance everywhere an order appears, and the navigation logic behind it lives in exactly one place (`useOrderRowLink`) rather than two copies that could quietly diverge.

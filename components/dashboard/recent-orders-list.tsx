@@ -1,9 +1,8 @@
 import { getOrders } from "@/lib/api/orders";
-import { formatShortDate, formatSignedCurrency } from "@/lib/format";
 import { SectionHeading } from "@/components/shared/section-heading";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { NEGATIVE_ORDER_STATUSES, OrderStatusIndicator } from "@/components/orders/order-status";
+import { RecentOrderRow } from "@/components/dashboard/recent-order-row";
 import { StickyLedgerCell } from "@/components/orders/sticky-ledger-cell";
 import { cn } from "@/lib/utils";
 
@@ -35,35 +34,9 @@ export async function RecentOrdersList() {
               </tr>
             </thead>
             <tbody>
-              {orders.map((order) => {
-                const negative = NEGATIVE_ORDER_STATUSES.has(order.status);
-                return (
-                  <tr key={order.id} className="border-b border-grid-line last:border-b-0">
-                    <StickyLedgerCell
-                      sticky="left"
-                      status={order.status}
-                      className="font-mono text-[13px] whitespace-nowrap text-muted-foreground"
-                    >
-                      {formatShortDate(order.createdAt)}
-                    </StickyLedgerCell>
-                    <td className="px-4 py-2.5">
-                      <span className="font-mono text-[13px] text-muted-foreground">{order.id}</span>{" "}
-                      <span className="font-medium">{order.customerName}</span>
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <OrderStatusIndicator status={order.status} />
-                    </td>
-                    <td
-                      className={cn(
-                        "px-4 py-2.5 text-right font-semibold tabular-nums",
-                        negative && "text-destructive"
-                      )}
-                    >
-                      {formatSignedCurrency(order.total, negative)}
-                    </td>
-                  </tr>
-                );
-              })}
+              {orders.map((order) => (
+                <RecentOrderRow key={order.id} order={order} />
+              ))}
             </tbody>
           </table>
         </div>

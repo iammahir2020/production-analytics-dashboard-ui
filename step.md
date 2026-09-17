@@ -29,6 +29,7 @@ Each step is a single, reviewable unit of work. Check it off after reviewing, th
 - **A Base UI form primitive doesn't necessarily do the obvious thing by default — check its actual type, don't assume.** `SelectValue` renders the raw selected value, not the matching option's label, unless given an explicit `children` mapping function. Same category as `ToggleGroup`'s array-valued single-select from earlier — read the type (`find node_modules/@base-ui/react/<component> -iname "*.d.ts"`) before trusting an assumption carried over from a different library's API shape
 - **Never combine an all-sides `border-{color}` utility with a directional one (`border-l-{color}`, `border-r-{color}`) on the same element — always use directional color utilities for every side that needs one, even the "default" sides.** `tailwind-merge` treats the all-sides utility as conflicting with the directional one and drops it entirely (not just the shared side) when the two appear together, silently leaving the non-overridden sides with no real color at all. Confirmed as a real shipped bug once already (the Phase 2b ledger) and caught again before shipping in the orders table's sticky column — worth checking for on sight now, not re-diagnosing from scratch each time it recurs
 - **A `border` on a `position: sticky` cell inside a `border-collapse` table doesn't reliably repaint at its current scrolled position (worst in Chrome) — use `box-shadow` for any accent/edge on a sticky table cell instead.** `box-shadow` isn't part of the border model and isn't affected by `border-collapse` at all. Two insets can combine in one declaration (`inset 3px 0 0 0 {color}, inset -1px 0 0 0 var(--border)`) for a status stripe + edge separator together. See `components/orders/sticky-ledger-cell.tsx`, the shared component both ledger tables use for their sticky leading column
+- **`notFound()` does not reliably produce an HTTP 404 status in the App Router — it depends on whether the response has already started streaming, and a route with any `loading.tsx` (or a page async enough to hit Suspense) almost always has.** Confirmed directly (not assumed): `curl -D -` against `/orders/<bad-id>` returns `200 OK` with the not-found UI in the body, both with and without `app/orders/[id]/loading.tsx` present — this is documented, not a bug (`node_modules/next/dist/docs/.../not-found.md`: "200 for streamed responses, 404 for non-streamed"). A real 404 status would need a pre-stream check (`proxy`, an experimental Cache Components pattern) — out of scope here. `notFound()` is still the right call: correct UI, a `noindex` meta tag, and a real limitation worth naming rather than silently shipping past. Found building Phase 4's `/orders/[id]`
 
 ## Phase 0 — Project Setup
 
@@ -126,10 +127,10 @@ Each step is a single, reviewable unit of work. Check it off after reviewing, th
 
 ## Phase 4 — Order Details
 
-- [ ] 31. Build `app/orders/[id]/page.tsx` Server Component — fetch order by id, `notFound()` on invalid id
-- [ ] 32. Add `app/orders/[id]/loading.tsx`
-- [ ] 33. Build `OrderDetailsView` (customer info, line items, status, timeline) — presentational
-- [ ] 34. Link each `OrderRow` to `/orders/[id]`
+- [x] 31. Build `app/orders/[id]/page.tsx` Server Component — fetch order by id, `notFound()` on invalid id
+- [x] 32. Add `app/orders/[id]/loading.tsx`
+- [x] 33. Build `OrderDetailsView` (customer info, line items, status, timeline) — presentational
+- [x] 34. Link each `OrderRow` to `/orders/[id]`
 
 🔖 **Suggested commit point** — order details route is wired up end to end.
 
