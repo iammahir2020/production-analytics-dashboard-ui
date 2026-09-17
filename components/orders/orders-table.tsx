@@ -2,6 +2,7 @@
 
 import { PackageSearch } from "lucide-react";
 import { useOrderFiltersUrl } from "@/hooks/use-order-filters";
+import { DEFAULT_PAGE_SIZE } from "@/lib/api/orders";
 import { OrderRow } from "@/components/orders/order-row";
 import { StickyLedgerCell } from "@/components/orders/sticky-ledger-cell";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -9,8 +10,6 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Order } from "@/lib/types/order";
 import { cn } from "@/lib/utils";
-
-const DEFAULT_SKELETON_ROW_COUNT = 8;
 
 interface OrdersTableProps {
   orders: Order[];
@@ -86,14 +85,28 @@ interface OrdersTableSkeletonProps {
   /** Matches the requested page size, which is already known from the URL
    * before the fetch resolves — so the skeleton shows roughly the right
    * number of rows instead of a fixed count that would visibly jump in
-   * height once real content (up to 50 rows) streams in. */
+   * height once real content (up to 50 rows) streams in. Defaults to
+   * DEFAULT_PAGE_SIZE (not a separately hand-picked number) — a real
+   * loading-state measurement caught those two constants having drifted
+   * apart (8 vs 10), which visibly changed the row count, not just row
+   * heights, once data arrived. See learn.md. */
   rowCount?: number;
 }
 
-export function OrdersTableSkeleton({ rowCount = DEFAULT_SKELETON_ROW_COUNT }: OrdersTableSkeletonProps) {
+export function OrdersTableSkeleton({ rowCount = DEFAULT_PAGE_SIZE }: OrdersTableSkeletonProps) {
   return (
     <Card className="overflow-hidden py-0">
       <div className={cn(SCROLL_CONTAINER_CLASS, "flex flex-col")}>
+        {/* Mirrors the real table's <thead> — measured at ~40px tall
+            (StickyLedgerCell's th padding + label line) — omitting it
+            entirely was itself a real height gap, not just the rows. */}
+        <div className="flex items-center gap-4 border-b border-grid-line px-4 pt-4 pb-2">
+          <Skeleton className="h-3 w-14 shrink-0" />
+          <Skeleton className="h-3 w-12 shrink-0" />
+          <Skeleton className="h-3 w-16 flex-1" />
+          <Skeleton className="h-3 w-12 shrink-0" />
+          <Skeleton className="h-3 w-14 shrink-0" />
+        </div>
         {Array.from({ length: rowCount }).map((_, index) => (
           <div
             key={index}
@@ -102,11 +115,11 @@ export function OrdersTableSkeleton({ rowCount = DEFAULT_SKELETON_ROW_COUNT }: O
               index !== rowCount - 1 && "border-b border-grid-line"
             )}
           >
-            <Skeleton className="h-3.5 w-16 shrink-0" />
-            <Skeleton className="h-3.5 w-24 shrink-0" />
-            <Skeleton className="h-3.5 w-28 flex-1" />
-            <Skeleton className="h-3.5 w-20 shrink-0" />
-            <Skeleton className="h-3.5 w-16 shrink-0" />
+            <Skeleton className="h-5 w-16 shrink-0" />
+            <Skeleton className="h-5 w-24 shrink-0" />
+            <Skeleton className="h-5 w-28 flex-1" />
+            <Skeleton className="h-5 w-20 shrink-0" />
+            <Skeleton className="h-5 w-16 shrink-0" />
           </div>
         ))}
       </div>

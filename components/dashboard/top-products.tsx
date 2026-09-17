@@ -46,6 +46,12 @@ export async function TopProducts() {
   );
 }
 
+// Bars are h-5 (20px), not h-3.5 (14px) — matching text-sm's real 20px
+// line-height rather than an arbitrary smaller placeholder. Measured via
+// a real loading-state screenshot (see learn.md): the shorter bars made
+// this card ~33px shorter than its real content, which mattered doubly
+// here since OrderStatusBreakdown stretches (h-full/flex-1) to match
+// whichever of the two is naturally taller in the same grid row.
 export function TopProductsSkeleton() {
   return (
     <section className="flex flex-col gap-3">
@@ -60,8 +66,8 @@ export function TopProductsSkeleton() {
                 index !== TOP_PRODUCTS_LIMIT - 1 && "border-b border-grid-line"
               )}
             >
-              <Skeleton className="h-3.5 w-32" />
-              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-5 w-32" />
+              <Skeleton className="h-5 w-20" />
             </li>
           ))}
         </ul>

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Search, X } from "lucide-react";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useOrderFiltersUrl } from "@/hooks/use-order-filters";
+import { DateRangeFilter } from "@/components/orders/date-range-filter";
 import { ORDER_STATUS_STYLES } from "@/components/orders/order-status";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -56,8 +57,14 @@ export function FiltersBar() {
   }, [debouncedSearch]);
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <div className="relative min-w-50 flex-1">
+    // Stacks one control per row below sm (640px) — at the page's actual
+    // mobile padding (px-4, app/layout.tsx), the desktop row's fixed
+    // widths (search min-w-50 + status w-40 + two w-37.5 dates + gaps)
+    // sum to ~800px, nowhere close to fitting even wrapped without going
+    // full-width per control first. sm:flex-wrap still lets the row wrap
+    // at in-between widths rather than demanding all-or-nothing.
+    <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+      <div className="relative w-full sm:min-w-50 sm:flex-1">
         <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
         <Input
           type="search"
@@ -70,7 +77,7 @@ export function FiltersBar() {
       </div>
 
       <Select value={filters.status} onValueChange={(value) => setFilter("status", value ?? "all")}>
-        <SelectTrigger className="w-40" aria-label="Filter by status">
+        <SelectTrigger className="w-full sm:w-40" aria-label="Filter by status">
           {/* SelectValue renders the raw value ("all", "pending", …) by
               default — it doesn't look up the matching SelectItem's label
               on its own. A children function is Base UI's documented way
@@ -88,50 +95,32 @@ export function FiltersBar() {
         </SelectContent>
       </Select>
 
-      <div className="flex items-center gap-1.5">
-        <label htmlFor="orders-date-from" className="sr-only">
-          From date
-        </label>
-        <Input
-          id="orders-date-from"
-          type="date"
-          value={filters.from}
-          onChange={(event) => setFilter("from", event.target.value)}
-          className="w-37.5"
-        />
-        <span className="text-sm text-muted-foreground">–</span>
-        <label htmlFor="orders-date-to" className="sr-only">
-          To date
-        </label>
-        <Input
-          id="orders-date-to"
-          type="date"
-          value={filters.to}
-          onChange={(event) => setFilter("to", event.target.value)}
-          className="w-37.5"
-        />
+      {/* DateRangeFilter and Clear share one row at every breakpoint,
+          rather than Clear being a top-level child of the outer flex-col —
+          as a direct child it inherited flex-col's default align-items:
+          stretch below sm, stretching Button's own box to the full row
+          width with its content centered inside, which read as its own
+          separate, oddly emphasized block instead of a small secondary
+          action. Nesting it here keeps it compact and inline instead. */}
+      <div className="flex items-center gap-2">
+        <DateRangeFilter />
+        {hasActiveFilters && (
+          <Button type="button" variant="ghost" size="sm" onClick={clearFilters} className="shrink-0">
+            <X className="size-3.5" aria-hidden="true" />
+            Clear
+          </Button>
+        )}
       </div>
-
-      {hasActiveFilters && (
-        <Button type="button" variant="ghost" size="sm" onClick={clearFilters}>
-          <X className="size-3.5" aria-hidden="true" />
-          Clear
-        </Button>
-      )}
     </div>
   );
 }
 
 export function FiltersBarSkeleton() {
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Skeleton className="h-8 min-w-50 flex-1" />
-      <Skeleton className="h-8 w-40" />
-      <div className="flex items-center gap-1.5">
-        <Skeleton className="h-8 w-37.5" />
-        <span className="text-sm text-muted-foreground">–</span>
-        <Skeleton className="h-8 w-37.5" />
-      </div>
+    <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+      <Skeleton className="h-8 w-full sm:min-w-50 sm:flex-1" />
+      <Skeleton className="h-8 w-full sm:w-40" />
+      <Skeleton className="h-8 w-full sm:w-44" />
     </div>
   );
 }

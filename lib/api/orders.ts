@@ -4,7 +4,12 @@ import type { Order, OrderFilters, PaginatedOrders } from "@/lib/types/order";
 import { mockFetch } from "./client";
 
 const orders = ordersData as Order[];
-const DEFAULT_PAGE_SIZE = 10;
+// Exported so OrdersTableSkeleton's fallback row count can't silently
+// drift from the real default page size the way it did once already —
+// found via a real loading-state measurement (see learn.md): the
+// skeleton was showing 8 placeholder rows while an unfiltered request
+// actually returns 10, a visible row-count jump on top of the height one.
+export const DEFAULT_PAGE_SIZE = 10;
 
 export async function getOrders(filters: OrderFilters = {}): Promise<PaginatedOrders> {
   let filtered = orders;

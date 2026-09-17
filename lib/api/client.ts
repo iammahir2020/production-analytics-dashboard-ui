@@ -19,7 +19,7 @@ const DEFAULT_FAIL_RATE = 0;
 // Generation random delays between 1 and 2000 ms to simulate
 // actual network delays
 function generateRandomDelay(): number {
-  return Math.floor(Math.random() * 2000) + 1;
+  return Math.floor(Math.random() * 1000) + 1;
 }
 
 export async function mockFetch<T>(data: T, opts: MockFetchOptions = {}): Promise<T> {

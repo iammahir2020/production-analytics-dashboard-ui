@@ -66,6 +66,11 @@ export async function RecentActivityFeed() {
   );
 }
 
+// Text bars are h-5 (20px, matching the real paragraph/timestamp's
+// inherited text-sm line-height) with gap-0.5 between them, matching
+// the real row's own gap exactly — both were off in the previous version
+// (h-4/h-3.5 bars, gap-1.5), found by measuring the real loading state
+// rather than assumed; see learn.md.
 export function RecentActivityFeedSkeleton() {
   return (
     <section className="flex h-full flex-col gap-3">
@@ -81,9 +86,9 @@ export function RecentActivityFeedSkeleton() {
               )}
             >
               <Skeleton className="size-8 shrink-0 rounded-full" />
-              <div className="flex flex-1 flex-col gap-1.5">
-                <Skeleton className="h-4 w-3/4" />
-                <Skeleton className="h-3.5 w-16" />
+              <div className="flex flex-1 flex-col gap-0.5">
+                <Skeleton className="h-5 w-3/4" />
+                <Skeleton className="h-5 w-16" />
               </div>
             </li>
           ))}

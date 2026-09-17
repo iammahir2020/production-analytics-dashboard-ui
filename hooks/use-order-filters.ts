@@ -36,15 +36,29 @@ export function useOrderFiltersUrl() {
   // user was *before* landing on /orders, not walk back through every
   // intermediate filter combination. scroll: false avoids the page
   // jumping to the top on every keystroke-driven update.
-  const setFilter = useCallback(
-    (key: keyof OrderFiltersState, value: string) => {
+  //
+  // setFilters (plural) exists so a date-range pick can set `from` and
+  // `to` in one router.replace — calling setFilter twice in the same
+  // handler would silently lose the first change, since both calls close
+  // over the same pre-update `searchParams` snapshot and the second
+  // replace's fresh URLSearchParams wouldn't know about the first's
+  // edit. setFilter is now a thin wrapper so the two can't drift apart.
+  const setFilters = useCallback(
+    (updates: Partial<Record<keyof OrderFiltersState, string>>) => {
       const params = new URLSearchParams(searchParams);
-      if (value && value !== "all") params.set(key, value);
-      else params.delete(key);
+      for (const [key, value] of Object.entries(updates)) {
+        if (value && value !== "all") params.set(key, value);
+        else params.delete(key);
+      }
       params.delete("page");
       router.replace(`${pathname}?${params.toString()}`, { scroll: false });
     },
     [router, pathname, searchParams]
+  );
+
+  const setFilter = useCallback(
+    (key: keyof OrderFiltersState, value: string) => setFilters({ [key]: value }),
+    [setFilters]
   );
 
   const clearFilters = useCallback(() => {
@@ -53,5 +67,5 @@ export function useOrderFiltersUrl() {
 
   const hasActiveFilters = filters.q !== "" || filters.status !== "all" || filters.from !== "" || filters.to !== "";
 
-  return { filters, setFilter, clearFilters, hasActiveFilters };
+  return { filters, setFilter, setFilters, clearFilters, hasActiveFilters };
 }

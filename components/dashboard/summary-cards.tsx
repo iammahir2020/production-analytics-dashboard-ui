@@ -154,14 +154,27 @@ export async function SummaryCards() {
   );
 }
 
+// The hero's label/value bars are sized to match HERO_VALUE's real
+// rendered height, not guessed — a real loading-state measurement (see
+// learn.md) found the whole KPI row measuring 88px in the skeleton vs
+// 113px once real data loaded, a jump big enough to see. HERO_VALUE's
+// 34px font-size actually renders taller than its own inherited 20px
+// line-height would suggest (confirmed empirically, not assumed — a
+// browser expands an inline box to fit large glyphs rather than clipping
+// them), so h-14 here isn't oversized for what it's standing in for.
+// Only the hero needed fixing: this row uses CSS Grid's default
+// align-items: stretch, so the four compact tiles (never individually
+// resized here) already get pulled up to match the hero automatically,
+// in both states — confirmed by the same measurement showing all 5 tiles
+// uniformly 88px before the fix and uniformly 113px after it.
 export function SummaryCardsSkeleton() {
   return (
     <div className="grid grid-cols-4 gap-2 lg:grid-cols-12">
       <Card className="col-span-4">
         <CardContent className="flex items-end justify-between gap-3">
-          <div className="flex flex-col gap-1.5">
-            <Skeleton className="h-3 w-24" />
-            <Skeleton className="h-9 w-40" />
+          <div className="flex flex-col gap-2">
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="h-14 w-40" />
           </div>
           <Skeleton className="h-7 w-21" />
         </CardContent>

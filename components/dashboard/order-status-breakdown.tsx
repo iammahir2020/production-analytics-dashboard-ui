@@ -34,9 +34,18 @@ export async function OrderStatusBreakdown() {
     <section className="flex h-full flex-col gap-3">
       <SectionHeading>Order status</SectionHeading>
       <Card className="flex-1">
-        <CardContent className="flex flex-1 items-center gap-4">
+        {/* flex-col below sm (640px): the donut is a fixed 160px and
+            shrink-0 (see StatusDonut) — side by side with the legend at
+            this section's actual mobile width (full page width minus
+            page + card padding, ~311px), there's only ~135px left for
+            the legend, not enough to fit "Cancelled / refunded" plus its
+            value on one line. Stacking (donut centered above a full-
+            width legend) avoids that instead of shrinking the donut,
+            which would cut into the one place this section actually
+            needs to stay legible at a glance. */}
+        <CardContent className="flex flex-1 flex-col items-center gap-4 sm:flex-row">
           <StatusDonut data={breakdown} />
-          <div className="flex min-w-0 flex-1 flex-col gap-2">
+          <div className="flex w-full min-w-0 flex-1 flex-col gap-2">
             {breakdown.map((point) => {
               const style = ORDER_STATUS_STYLES[point.status];
               return (
@@ -67,15 +76,24 @@ export function OrderStatusBreakdownSkeleton() {
     <section className="flex h-full flex-col gap-3">
       <SectionHeading>Order status</SectionHeading>
       <Card className="flex-1">
-        <CardContent className="flex flex-1 items-center gap-4">
+        <CardContent className="flex flex-1 flex-col items-center gap-4 sm:flex-row">
           <Skeleton className="size-40 shrink-0 rounded-full" />
-          <div className="flex flex-1 flex-col gap-2">
+          <div className="flex w-full flex-1 flex-col gap-2">
             {Array.from({ length: LEGEND_ROW_COUNT }).map((_, i) => (
               <div key={i} className="flex items-center justify-between gap-2">
-                <Skeleton className="h-3.5 w-20" />
-                <Skeleton className="h-3.5 w-6" />
+                <Skeleton className="h-5 w-20" />
+                <Skeleton className="h-5 w-6" />
               </div>
             ))}
+            {/* Mirrors the real component's cancellation-rate summary row
+                (mt-1/border-t/pt-2) — omitting it wasn't just a height
+                gap, it meant a whole row appearing from nothing once data
+                loaded. Caught via a real loading-state measurement, see
+                learn.md. */}
+            <div className="mt-1 flex items-center justify-between gap-2 border-t border-grid-line pt-2">
+              <Skeleton className="h-5 w-32" />
+              <Skeleton className="h-5 w-10" />
+            </div>
           </div>
         </CardContent>
       </Card>

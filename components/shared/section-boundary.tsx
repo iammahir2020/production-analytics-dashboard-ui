@@ -43,7 +43,19 @@ export function SectionBoundary({ children, label }: SectionBoundaryProps) {
       key={attempt}
       onError={(error) => console.error(`[${label}] failed to load:`, error)}
       fallback={
-        <Card className="flex flex-col items-center gap-3 border-destructive/30 py-8 text-center">
+        // h-full + justify-center: this fallback replaces a section
+        // whose SUCCESS state often has its own h-full/flex-1 (to match
+        // a taller sibling in the same grid row — Order status/Top
+        // products, Recent orders/Recent activity). Without matching
+        // sizing here, a failed section next to a successful, taller one
+        // left a real, measured gap (confirmed via getBoundingClientRect:
+        // the card sat at its own ~158px natural height inside a
+        // ~230px-tall grid cell, a bare 72px gap before the next section)
+        // instead of the message reading as centered in its allotted
+        // space. On a standalone section with no sibling to stretch
+        // against (Overview, Charts), h-full is a no-op against the
+        // auto-height parent — harmless, not conditionally needed.
+        <Card className="flex h-full flex-col items-center justify-center gap-3 border-destructive/30 py-8 text-center">
           <AlertCircle className="size-5 text-destructive" aria-hidden="true" />
           <p className="text-sm text-muted-foreground">Couldn&apos;t load {label.toLowerCase()}.</p>
           <Button type="button" variant="outline" size="sm" disabled={isPending} onClick={handleRetry}>

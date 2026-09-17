@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { FiltersBar } from "@/components/orders/filters-bar";
 import { OrdersResults, OrdersResultsSkeleton } from "@/components/orders/orders-results";
+import { SectionBoundary } from "@/components/shared/section-boundary";
 import { ORDER_PAGE_SIZE_OPTIONS, ORDER_STATUSES, type OrderFilters, type OrderStatus } from "@/lib/types/order";
 
 // Same reasoning as the dashboard (app/page.tsx): getOrders() goes through
@@ -38,14 +39,22 @@ function parseFilters(searchParams: Record<string, string | string[] | undefined
 
 // FiltersBar sits outside the Suspense boundary on purpose: it doesn't
 // depend on server data at all (only the URL), so it must never be part
-// of what suspends. OrdersResults is the page's one real data dependency
-// (the filtered order list) and gets exactly one boundary around it —
-// still "sections follow data dependencies," just narrower than it first
-// looked: the dependency is the results, not the whole page. error.tsx
-// still covers the whole route (an error thrown inside OrdersResults
-// still propagates up to the nearest error boundary regardless of the
-// Suspense boundary in between), and loading.tsx still covers the first
-// navigation into /orders, before anything is mounted yet.
+// of what suspends *or errors*. OrdersResults is the page's one real data
+// dependency (the filtered order list) and gets both a Suspense boundary
+// (for loading) and a SectionBoundary (for errors) — the same pairing
+// the dashboard already uses for each of its sections. The SectionBoundary
+// matters on its own, separately from Suspense: a thrown error propagates
+// past a Suspense boundary to the nearest *error* boundary regardless —
+// without one scoped here, an OrdersResults failure would still reach
+// app/orders/error.tsx and take FiltersBar down with it, exactly the
+// "clunky filter" disruption this same file already fixed for the loading
+// case. Confirmed directly (not assumed): before this boundary existed,
+// forcing getOrders() to fail replaced the entire page, search box and
+// all, with the route-level error card. app/orders/error.tsx still exists
+// as the last-resort catch-all for anything outside OrdersResults (a
+// genuinely unexpected render error elsewhere on the page), and
+// loading.tsx still covers the first navigation into /orders, before
+// anything is mounted yet.
 export default async function OrdersPage({ searchParams }: PageProps<"/orders">) {
   const filters = parseFilters(await searchParams);
 
@@ -54,7 +63,9 @@ export default async function OrdersPage({ searchParams }: PageProps<"/orders">)
       <h1 className="sr-only">Orders</h1>
       <FiltersBar />
       <Suspense fallback={<OrdersResultsSkeleton pageSize={filters.pageSize} />}>
-        <OrdersResults filters={filters} />
+        <SectionBoundary label="Orders">
+          <OrdersResults filters={filters} />
+        </SectionBoundary>
       </Suspense>
     </div>
   );

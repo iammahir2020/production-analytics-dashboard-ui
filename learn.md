@@ -1788,3 +1788,313 @@ npm run build      # → compiled clean, TypeScript clean, routes unchanged
 ```
 
 **How this moves the build forward:** the service layer (`mockFetch`, `getOrders`) and the two highest-value/easiest-to-assert UI pieces now have a real, fast (~1–2s), deterministic regression net — useful the moment any later phase (README, deploy prep, or any further UI pass) touches this code again. The four real Jest/`next/jest`/jsdom gotchas found along the way are written into `step.md`'s standing-lessons list, not just fixed silently, since none of them were guessable in advance and all four would reproduce identically for any later test file in this project.
+
+## Phase 6 — Responsive Pass (steps 41–43)
+
+**What was asked.** The three items `step.md` names: dashboard breakpoints (summary cards, chart sizing) across mobile/tablet/desktop, orders table/page mobile responsiveness, and the filters bar stacking on mobile.
+
+**Method — no browser screenshot tool is available in this environment, so instead of guessing, actually did the pixel math against this app's real container padding, real breakpoints, and real component sizes (fixed pixel widths, `shrink-0` flags), then confirmed the resulting classes against a production server's rendered HTML.** `app/layout.tsx`'s `<main>` sets `px-4 sm:px-6` — so a 375px phone has 343px of usable width, a real, specific number the rest of this audit is anchored to rather than a vague "does it look okay" guess.
+
+**Found real, concrete bugs, not just theoretical ones — worth stating why each one is real:**
+
+1. **`FiltersBar` had no intentional mobile treatment at all** — just `flex flex-wrap items-center gap-2` at every breakpoint, meaning exactly where each control wrapped onto its own line was whatever the summed fixed widths happened to produce, not a deliberate choice. Summed desktop widths (search `min-w-50`=200px + status `w-40`=160px + two `w-37.5` date inputs=300px + gaps) come to roughly 800px — nowhere near fitting a 343px phone screen, so *something* was always going to wrap, just not predictably or cleanly.
+2. **`OrderStatusBreakdown`'s donut is a fixed 160px and explicitly `shrink-0`** (`StatusDonut`, `h-40 w-40 shrink-0`) — sitting beside a legend in a plain `flex items-center gap-4` row with no responsive treatment at all. At this section's actual mobile width (343px page width → 311px inside the Card's own padding), that leaves only 311 − 160 − 16(gap) = **135px** for the legend — and one legend row reads "Cancelled / refunded" plus a percentage value on the same line, which doesn't fit in 135px. This is exactly the kind of bug the project's own standing rule ("do a real-screen review, not just a clean build") exists to catch — `tsc`/`lint`/`build` all pass on this either way, since nothing here is a type or syntax error, only a real layout constraint violated at a specific width.
+
+**A third candidate considered and deliberately not done: moving the two-column dashboard sections (charts, insights row, recent-orders/activity row) from their `lg:` (1024px) split to `md:` (768px), so tablets get a genuine side-by-side layout instead of inheriting the mobile single-column stack.** Worked through the actual math before deciding against it: if the outer grid splits to 2-up at 768px, `OrderStatusBreakdown` only gets its 4/12 share of the row (≈236px column width) at exactly the width range (768–1023px) where a plain `sm:` (640px) breakpoint on its internal donut/legend split would *already* have switched to row mode — reintroducing the same cramping bug, just at tablet width instead of phone width, and harder to reason about since it depends on two nested breakpoints agreeing. Fixing that properly would need a real container query (`@container`/`@sm:`, which this codebase already uses once, in `CardHeader`) rather than a viewport media query, since the donut needs to react to its own column's rendered width, not the viewport's. Chose not to introduce that now: the current single-column-until-`lg:` tablet layout is fully readable and not cramped (confirmed by the same math — at 768px, a still-single-column `OrderStatusBreakdown` gets the *full* ~720px row width, comfortably fitting donut+legend side by side even before this pass's own `sm:` fix ever mattered) — just not maximally space-efficient. A real, working tablet layout beats a risky one I can't visually verify in this environment.
+
+**Re-verified, not re-built: orders table/page mobile responsiveness (step 42) and the dashboard header/pagination/KPI strip.** These already went through dedicated mobile-responsiveness work in earlier sessions (the sticky order-id column, the `max-h-[65vh] overflow-auto` scroll container, `StickyLedgerCell`'s frozen header) — re-checked the actual current classes rather than assuming they still hold, confirmed the pattern is sound and needs no changes here. Also walked the app header (logo + nav links + theme toggle, well under 343px combined) and `Pagination` (no fixed-width rigid elements, `flex-wrap` throughout) and found nothing broken at any width — worth recording that this pass looked, not just skipped these because a prior pass touched them.
+
+**The fixes:**
+- `FiltersBar`/`FiltersBarSkeleton`: `flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center` — one full-width control per row below `sm` (640px), the original wrapped-row layout from `sm` up. Each control gets `w-full sm:<original-width>` (search, status select) or `flex-1 sm:w-37.5 sm:flex-none` (the two date inputs, so they split the row evenly on mobile instead of using their fixed 150px each, which would nearly overflow a 343px screen on their own).
+- `OrderStatusBreakdown`/its skeleton: `CardContent` becomes `flex flex-1 flex-col items-center gap-4 sm:flex-row` — donut centered above a full-width (`w-full`) legend below `sm`, the original side-by-side row from `sm` up. Chose `sm` specifically because the outer grid stays single-column below `lg`, so this section has its *full* row width available anywhere from `sm` to `lg` — no risk of the nested-breakpoint cramping problem described above, precisely because the outer split wasn't also moved.
+
+**Verification.** `npm run build`/`npm run lint`/`npm test` all clean (build unaffected — same three routes, same one pre-existing lint warning, same 29 passing tests — these are layout-only className changes with no logic touched). Production server + `curl`, checked for the actual rendered classes rather than assuming the edit "worked": all of `sm:min-w-50`/`sm:w-40`/`sm:w-37.5`/`sm:flex-none` present on the real (non-skeleton) `<input>`/`<button>` elements in `/orders`'s response, and `sm:flex-row` present on the real (non-skeleton) `OrderStatusBreakdown` `CardContent` in `/`'s response — confirmed by finding every occurrence in the document and checking each one's surrounding markup, not just the first match (the skeleton's near-identical classes render earlier in the same streamed document and would otherwise produce a false positive).
+
+**One limitation, same category as every other responsive claim across this project: no real browser or screenshot tool was available to visually confirm the wrap/stack points, hover, or actual rendered spacing.** Everything above is confirmed by exact pixel arithmetic against this app's real, measured container padding and component sizes, plus confirming the intended classes actually reached the rendered HTML — not by looking at a live viewport. Offered to the user as an open item rather than silently assumed correct.
+
+**Commands run:**
+```
+npm run build && npm run lint && npm test   # all clean before any edits
+                                              # (baseline check)
+
+# — edits to filters-bar.tsx, order-status-breakdown.tsx —
+
+npm run build   # → compiled clean, TypeScript clean, routes unchanged
+npm run lint     # → clean (1 pre-existing unrelated warning)
+npm test          # → 5 suites, 29 tests, all still passing
+
+npm run start &
+curl -s http://localhost:3000/orders -o /tmp/orders-r.html -w "HTTP:%{http_code}\n"
+curl -s http://localhost:3000/ -o /tmp/dash-r.html -w "HTTP:%{http_code}\n"
+# → both HTTP 200
+
+python3 -c "... find every occurrence of sm:w-40 / sm:w-37.5 / sm:flex-row,
+             print surrounding context for each, confirm at least one
+             occurrence is the real (non-skeleton) element, not just the
+             skeleton's matching class string ..."
+# → confirmed present on the real SelectTrigger, both real date <input>s,
+#   and the real OrderStatusBreakdown CardContent
+
+pkill -9 -f "next-server"
+rm -f /tmp/orders-r.html /tmp/dash-r.html
+```
+
+**How this moves the build forward:** the two remaining genuine mobile-layout bugs in the app are fixed and verified; the tablet-breakpoint idea that was considered and set aside is written down with the actual reasoning (a container-query problem, not a "didn't get to it" gap), so it doesn't need re-deriving if it comes up again later.
+
+## Skeleton-vs-real size audit (dashboard + orders page)
+
+**What was asked.** Check whether the loading skeletons across the dashboard and orders page are undersized relative to the real content they stand in for — the user's own hunch was that they mostly are, and that this causes a visible layout shift once real data streams in.
+
+**First real obstacle: actually seeing a skeleton at all.** Every real fetch in this app goes through `mockFetch`'s random 1–2000ms delay, too short and unpredictable to reliably screenshot. Temporarily forced `generateRandomDelay()` in `lib/api/client.ts` to a fixed 8000ms (reverted before finishing — confirmed via `git status` showing no diff on that file at the end). Even with 8 real seconds to work with, the first several attempts still failed to catch the loading state:
+- `browser_navigate` returned only once the page was fully loaded — expected in hindsight (a streamed RSC response doesn't fire the browser's `load` event until every Suspense boundary's chunk has flushed), but not obvious going in.
+- Clicking the "Orders" nav link (`browser_click`) also landed on fully-resolved content immediately — this one turned out to be Next's own router prefetch/cache: `<Link>` had already fetched `/orders` in the background while it sat in the viewport, so the "navigation" never even touched the artificially slow `mockFetch` path.
+- What worked: `browser_evaluate(() => location.reload())`. Unlike the three tools above, `browser_evaluate` doesn't auto-wait for the page to settle — it just runs the JS and returns, so a *following* tool call (another `evaluate`, or occasionally a `take_screenshot` if the round-trip was fast enough) had a real multi-second window to inspect the still-loading page. Confirmed this was genuinely mid-load, not a fluke, two ways: the document title read `"Loading http://localhost:3000/"` (the browser's own placeholder, shown before the page's real `<title>` tag — itself part of the static shell — has even arrived) immediately after triggering reload, and a screenshot taken in that window visually showed skeleton placeholders, not real data.
+
+**Measured, didn't eyeball — every number below is `getBoundingClientRect().height` from the actual rendered page, both before and after each fix, at a 1440×1000 viewport.**
+
+| Section | Skeleton (before) | Real | Gap | Skeleton (after) | Gap now |
+|---|---|---|---|---|---|
+| KPI cards (all 5, uniform) | 88px | 113px | −25px | 114px | +1px |
+| Order status | 194px | 209px | −15px | 207px | −2px |
+| Top products | 176px | 209px | −33px | 206px | −3px |
+| Recent orders | 313px | 385px | −72px | 374px | −11px |
+| Recent activity | 326px | 385px | −59px | 374px | −11px |
+| Revenue/Orders charts | 196px | 196px | 0px (already correct) | — | — |
+| Orders-page table | 281px, **8 rows** | 471px, **10 rows** | −190px, wrong row count | 448px, **10 rows** | −23px, correct row count |
+
+**Root causes, not just numbers — three distinct categories of bug:**
+
+1. **Bar heights too short.** `SummaryCards`, `TopProducts`, `RecentOrdersList`, and `OrdersTable`'s skeletons all used `h-3.5` (14px) placeholder bars standing in for real `text-sm` content that actually renders at a 20px line-height. `SummaryCards`' hero figure was a sharper case: `HERO_VALUE` is a 34px font-size nominally inheriting a 20px line-height from its ancestor, but browsers expand the line box to fit oversized glyphs rather than clip them — confirmed empirically (measured the real row at ~55px tall for text alone), not assumed. Fixed by sizing bars to `h-5` (20px) generally, and `h-14` specifically for the hero value bar once the real measurement was in hand.
+2. **Whole rows/sections missing, not just undersized.** `OrderStatusBreakdownSkeleton` had 5 legend-row placeholders but no placeholder for the real component's 6th row (the "Cancelled / refunded" summary, with its own `border-t` separator) — that row would have visibly *appeared from nothing* on load, not just shifted position. Both table skeletons (`RecentOrdersList`, `OrdersTable`) had no `<thead>` placeholder at all, despite the real tables always rendering one.
+3. **A genuinely wrong constant, not a sizing issue.** `OrdersTableSkeleton` defaulted to 8 placeholder rows (`DEFAULT_SKELETON_ROW_COUNT`, a number invented for the skeleton alone) while `getOrders()`'s own actual default page size is 10 (`DEFAULT_PAGE_SIZE` in `lib/api/orders.ts`) — two independently-maintained constants that happened to start equal and drifted apart at some point. This is the same category of bug the project's already hit once before (`ORDER_STATUSES`, `ORDER_PAGE_SIZE_OPTIONS` — see `step.md`'s standing lessons on single-source-of-truth constants), just not caught for this particular pair until now. Fixed by exporting `DEFAULT_PAGE_SIZE` and having the skeleton default to *it* instead of its own number — structurally impossible for the two to disagree again.
+
+**One gap left deliberately unresolved, and why.** `RecentActivityFeed`'s skeleton still measures ~11px short per card even after the bar-height fix. Traced this to the real data itself, not a sizing mistake: activity messages vary in length ("New order ord_0166 placed by Imran Kabir — ৳1,200.00" vs "New customer Rahim Bhuiyan registered"), and some wrap to two lines at this viewport width while others don't — measured one real row directly at 70px, but the card's total (385px ÷ 5 ≈ 77px average) is higher, meaning at least one row is taller than the baseline. A uniform skeleton can approximate the common case but can't predict which specific rows will wrap before the data has even loaded — chasing an exact match here would mean guessing at real message lengths, which the skeleton has no way to know. Left as a small, honest, disclosed residual gap rather than an invented "solution."
+
+**Verification.** `npm run build`/`npm run lint`/`npm test` all clean (build: same three routes, same one pre-existing warning; tests: all 29 still passing — none of this touched tested logic). Every number in the table above was re-measured after the corresponding fix, not just computed by hand and trusted — including a final visual screenshot of the actual loading state (not just the numbers) showing the donut placeholder, the now-present cancellation-rate row, and both table header rows all rendering as intended. `lib/api/client.ts`'s temporary 8-second delay was reverted before finishing — confirmed via `git status` showing zero diff on that file.
+
+**Commands run:**
+```
+# temporarily force generateRandomDelay() to return 8000 (reverted at the end)
+
+npm run dev &   # (several restarts along the way — see below)
+
+# via Playwright MCP tools:
+browser_navigate → http://localhost:3000/        # returns only once fully loaded
+browser_take_screenshot                            # confirms: already real data
+browser_click "Orders" nav link                    # same result — router prefetch
+browser_evaluate(() => { location.reload(); return 'reloading'; })
+  → Page Title: "Loading http://localhost:3000/"   # confirms genuinely mid-load
+browser_take_screenshot                             # caught the real skeleton state
+
+browser_evaluate(() => {
+  // getBoundingClientRect() on every h2's sibling Card, and the ungrouped
+  // KPI/chart cards, returned as one object
+})
+  → baseline "before" measurements (table above)
+
+# — edits across 7 files —
+
+# repeated: reload via evaluate, re-measure via evaluate, compare to baseline
+# — iterated once more on Recent orders' header-row bar height after the
+#   first pass left an 8px gap traced specifically to it
+
+npm run build && npm run lint && npm test   # all clean
+
+rm -rf .playwright-mcp   # screenshots/snapshots cleaned up (already gitignored)
+pkill -9 -f "next-server"; pkill -9 -f "next dev"
+
+# reverted lib/api/client.ts's generateRandomDelay() back to
+# `Math.floor(Math.random() * 2000) + 1` — confirmed via `git status --short`
+# showing no diff on that file
+```
+
+**How this moves the build forward:** this is the first real, hands-on use of the Playwright MCP browser access set up earlier this session — and it immediately found bugs the project's established `curl`-plus-pixel-math verification method structurally could not (a transient loading state, real rendered text metrics, an actual browser's line-box behavior). The `evaluate`-vs-`navigate`/`click`/`screenshot` auto-wait distinction is written into `step.md` as a standing lesson, since it's exactly the kind of non-obvious tool behavior that would otherwise be rediscovered the hard way next time a transient UI state needs inspecting.
+
+## Date-range filter: shadcn Calendar + Popover replacing the native date inputs
+
+**What was asked.** Swap the orders page's two native `<input type="date">` fields for shadcn's `Calendar` component (previously scoped as informational-only — "let me know, don't implement"), now actually build it, and verify it works on both mobile and desktop.
+
+**Confirmed available for this project's exact style before installing anything.** `npx shadcn view calendar` (read-only) showed a `calendar` registry item for `base-nova` — this project's own style (Base UI, not the default Radix one; `components.json`'s `"style": "base-nova"`). Built on `react-day-picker` (a headless library independent of Radix/Base UI, which is why it works with either style) plus `date-fns` (already a dependency). Installed both `calendar` and `popover` (the date picker pattern needs a trigger + popup, and `Popover` didn't exist in `components/ui/` yet) via `npx shadcn add calendar popover` — added `react-day-picker` as the one new dependency, everything else already present.
+
+**One immediate fix at the source, matching established project practice.** The generated `popover.tsx` had the same `shadow-md ring-1 ring-foreground/10` the project has already stripped from `Card`/`Dialog`/`Select`/`ChartTooltip` at the point each was added (Khata direction: borders-only depth). Fixed the same way, in the same commit as installing it, not left for a later pass.
+
+**Design decision: one combined range-picker, not two separate single-date pickers.** The native inputs were two independent fields; `react-day-picker`'s `mode="range"` is built for exactly the from/to shape this filter already has, and one continuous interaction (pick a start day, then an end day, in one popover) reads better than tabbing between two separate controls for what's really one filter. This is a real design call, not just "the obvious shadcn way" — flagged here since it changes the interaction model, not just the visual component.
+
+**A real bug found only by actually testing it, not by reading the code:** the popover closed after a *single* click. Read `react-day-picker`'s own `addToRange` source (`node_modules/react-day-picker/dist/esm/utils/addToRange.js`) to find out why rather than guessing: with the library's default `min={0}`, the very first click on an empty range immediately produces `{from: day, to: day}` — both endpoints already non-null. The original logic ("commit and close once both endpoints exist") fired on that very first click, before a real second endpoint could ever be chosen. Confirmed the bug visually before fixing it (a screenshot after one click showed the popover already closed, the trigger already reading "Sep 13, 2026 - Sep 13, 2026", the table already filtered to a single day) rather than assuming the fix was needed from reading the code alone.
+
+**The fix: an explicit Apply button, the same pattern most real date-range pickers use** — not a cleverer heuristic trying to distinguish "first click" from "second click." The popover now holds a local, uncommitted `range` draft (synced from the URL on open, so a closed-without-applying attempt never leaks into the next open) and only calls `setFilters`+closes on an explicit Apply click. This sidesteps the seed-vs-complete ambiguity entirely instead of trying to out-guess `react-day-picker`'s internal state machine, and has a real secondary benefit: the user can freely change their mind mid-selection (click a different start day, keep browsing months) without anything committing prematurely.
+
+**A real bug in the URL-state hook, found while wiring Apply up — not specific to the calendar.** `useOrderFiltersUrl`'s existing `setFilter(key, value)` closes over one `searchParams` snapshot per call. Calling it twice in the same handler (`setFilter("from", x); setFilter("to", y)`, the obvious first attempt at committing both endpoints) would have silently lost the `from` change — both calls build a fresh `URLSearchParams` from the *same* pre-update snapshot, so the second `router.replace` completely overwrites the first's effect. Caught this by reading the hook's actual implementation before wiring anything up against it, not by hitting the bug at runtime. Fixed by adding `setFilters(updates: Partial<...>)`, which builds one `URLSearchParams` from every change and calls `router.replace` once; `setFilter` is now a thin wrapper around it, so the two can't drift into two different code paths.
+
+**Mobile: one month, not two — decided by the numbers, not a guess.** `numberOfMonths={2}` at any width narrower than `sm` (640px) would force the popover's own content wider than the viewport itself. Two `<Calendar>` instances are mounted (`className="sm:hidden"` / `className="hidden sm:flex"`), toggled by CSS rather than a `useMediaQuery` hook — avoids any SSR/hydration mismatch a JS viewport check would introduce (the server can't know the client's viewport size), at the acceptable cost of two lightweight `DayPicker` instances mounted at once instead of one.
+
+**Verification — actually driven in a real browser (Playwright MCP), both breakpoints, not inferred from the code.** Confirmed directly:
+- Desktop (1440px): two-month calendar renders correctly, aligned under the trigger, no clipping
+- A full click-through of a real range selection: click day 13 (draft only, Apply/Clear go from disabled to enabled, table stays unfiltered, URL unchanged) → click day 15 (range visually highlighted across 13–14–15) → click Apply (URL becomes `?from=2026-09-13&to=2026-09-15`, popover closes, table correctly filtered to the 6 orders in that range, trigger now reads "Sep 13, 2026 – Sep 15, 2026")
+- The page-level "Clear" button resets the trigger back to "Date range" and the URL back to `/orders` — confirmed the popover's own draft state resyncs correctly by reopening it afterward and finding it empty, not stale
+- Light theme: calendar, popover, and trigger all render with correct contrast and the theme's actual token colors — checked directly, not assumed from dark mode alone
+- Mobile (375px): trigger renders full-width (consistent with the rest of `FiltersBar`'s Phase 6 stacking), popover shows exactly one month with no horizontal overflow, month navigation (Prev/Next) works, a cross-month range (Sep 18 → Oct 5, navigating forward a month mid-selection) applies correctly, and a real "no orders in this range" result correctly renders the existing `EmptyState` with its "Clear filters" action
+
+`npm run build`/`npm run lint`/`npm test` all clean throughout (build: same three routes, same one pre-existing warning; tests: all 29 still passing).
+
+**Commands run:**
+```
+npx shadcn view calendar    # confirmed a base-nova calendar exists, read-only
+npx shadcn view popover     # confirmed the same for popover
+npx shadcn add calendar popover --yes
+# → added react-day-picker; components/ui/calendar.tsx, components/ui/popover.tsx
+
+# fixed popover.tsx's ring/shadow at the source (Khata direction)
+
+npm run build && npm run lint   # clean
+
+# built components/orders/date-range-filter.tsx, wired into filters-bar.tsx,
+# added setFilters to hooks/use-order-filters.ts
+
+npm run dev &
+# via Playwright MCP: navigate /orders, resize 1440x900, open the popover,
+# click day 13 → screenshot (confirms draft-only, not committed)
+# → found the popover had ALREADY closed and committed after one click
+
+# read node_modules/react-day-picker/dist/esm/utils/addToRange.js
+# → confirmed the same-day-seed behavior; redesigned with an Apply button
+
+npm run lint   # clean
+# re-tested: click 13 (stays open, Apply/Clear enable) → click 15 (range
+# highights) → Apply (URL commits, table filters, popover closes) — all
+# confirmed via snapshot + screenshot, not assumed
+# tested page-level Clear + reopen (confirms draft resync)
+# switched to Light theme, re-opened popover, screenshotted
+# resized to 375x800, re-tested the full click-through on mobile,
+# including cross-month navigation and the empty-state path
+
+npm run build && npm run lint && npm test   # all clean
+rm -rf .playwright-mcp
+pkill -9 -f "next-server"; pkill -9 -f "next dev"
+```
+
+**How this moves the build forward:** the orders page's date filter is now a real, polished range picker rather than two disconnected native inputs, matching the shadcn/Base UI component set already used everywhere else in the app. Two real, non-obvious bugs (the URL-state hook's snapshot problem, `react-day-picker`'s same-day seed behavior) were caught before shipping specifically because the feature was driven end-to-end in a real browser rather than trusted from reading the code — both are written into `step.md` since either would resurface identically anywhere else in the app that tries the same "two params from one interaction" or "range-mode calendar" pattern.
+
+## Follow-up: "Clear" read as an odd, separate row on mobile
+
+**What was asked.** A screenshot showed "Clear" rendering as its own full-width, centered row below the date-range trigger on mobile — asked for a better mobile treatment than a separate row.
+
+**Root cause, and why the obvious fix (nest it beside the trigger) didn't work on the first attempt.** `Clear` was a direct child of the outer `flex flex-col` container — below `sm`, every direct child becomes its own row by construction, and the flex-col default `align-items: stretch` stretched the Button's own box to the full row width, with its content then centered inside via the button's own `justify-center`. First fix: nest `DateRangeFilter` and `Clear` together in one `flex items-center gap-2` wrapper so they'd share a row instead. That alone didn't work — `Clear` vanished off-screen entirely. Measured why with `getBoundingClientRect()` rather than guessing further: the date trigger's rect was the full 343px row width, `Clear`'s rect started at `x: 367` on a 375px-wide viewport (i.e. entirely past the visible edge), and the wrapper's `scrollWidth` (423px) exceeded its `clientWidth` (343px) by almost exactly `Clear`'s own width. Checked the trigger's actual computed style next: `flex-shrink: 0` — traced to `Button`'s own base classes (`shrink-0`, a sensible default for buttons generally, e.g. inside a horizontal button group where every button should hold its size). That default silently overrode the shrinking `Clear` needed room to appear at all; an earlier `min-w-0` addition had no effect because `flex-shrink: 0` means "never shrink," full stop — `min-width` only matters once shrinking is actually allowed to happen.
+
+**Fix:** added `shrink` (not `shrink-0`) to the trigger's own className — `tailwind-merge` treats them as the same utility family and lets the later one win, so this instance shrinks while every other `Button` in the app keeps its sensible non-shrinking default. Kept the earlier `min-w-0` (on both the button and its label `<span>`) since it's still needed for the truncated label text to actually shrink once `flex-shrink` is allowed to act at all.
+
+**Verification.** Re-tested via Playwright at 375px: `Clear` now sits compactly beside the (truncated, if needed) date-range label on one row; re-checked the no-active-filter state (trigger alone, full width, no dangling gap) and a status-only-filter state (an empty "Date range" placeholder next to "Clear" still reads fine, since "Clear" is a generic clear-all action, not date-specific). Re-confirmed desktop (1440px) is visually unchanged. `npm run build`/`npm run lint`/`npm test` all clean.
+
+**Commands run:**
+```
+npm run dev &
+# via Playwright MCP: 375px viewport, navigate /orders?from=...&to=...,
+# screenshot → Clear button entirely missing from the visible page
+
+browser_evaluate(() => { /* getBoundingClientRect() on the date button,
+  Clear button, and their wrapper */ })
+# → Clear's rect starts past the viewport edge; wrapper scrollWidth >
+#   clientWidth by ~Clear's own width — confirms real overflow, not a
+#   z-index/visibility issue
+
+browser_evaluate(() => getComputedStyle(dateBtn))
+# → flexShrink: "0" — traced to Button's own base classes
+
+# added shrink (overriding shrink-0) to the trigger's className
+
+npm run lint   # clean
+# re-tested: 375px (Clear now inline, compact), no-filter state,
+# status-only state, 1440px desktop (unchanged) — all via screenshot
+
+npm run build && npm run lint && npm test   # all clean
+rm -rf .playwright-mcp
+pkill -9 -f "next-server"; pkill -9 -f "next dev"
+```
+
+**How this moves the build forward:** a real, if small, layout bug caught from a single user screenshot and fixed with the same measure-first discipline as the rest of this session — worth remembering that a component's own sensible base default (`shrink-0`) can silently defeat a parent-level layout intent, and that `min-width` fixes are inert until whatever's actually blocking shrinkage (`flex-shrink: 0` here) is addressed first.
+
+## Error-state audit: forced failures, both pages, retry mechanism
+
+**What was asked.** Run real tests with `DEFAULT_FAIL_RATE` set so API errors actually occur, on both the dashboard and orders pages, and check the error UI and the retry mechanism actually work — three screenshots were provided showing dashboard error states that "don't seem okay."
+
+**Found `DEFAULT_FAIL_RATE` already live at `0.5`** (not something touched this session before now — an external edit, matching the project's established practice of noting rather than silently reverting these). Needed *deterministic*, not random, reproduction to actually diagnose the screenshots' specific layout problem rather than hunting for it across lucky reloads: temporarily set the global rate to `0` and added an explicit `{ failRate: 1 }` / `{ failRate: 0 }` override to the exact one or two `mockFetch` calls needed for each scenario (`getTopProducts` forced to fail while `getOrderStatusBreakdown` forced to succeed, matching the screenshots exactly; later `getOrders` forced to fail for the orders-page tests). Every override was reverted immediately after use — confirmed via `git diff` showing zero change on `lib/api/analytics.ts` and only the pre-existing, unrelated diff on `lib/api/client.ts`/`lib/api/orders.ts` at the end.
+
+**Bug 1 (the one in the screenshots): a failed section didn't stretch to fill its grid row, leaving a real, measured dead-space gap.** Reproduced exactly: `OrderStatusBreakdown` succeeding (198px card, matching its own donut+legend content) beside `TopProducts` failing — measured via `getBoundingClientRect()`, not eyeballed: the error `Card` sat at its own natural 158px height inside a grid cell CSS Grid had stretched to 230px (the row's height, set by the taller successful sibling — the same `align-items: stretch` mechanism that correctly sizes successful content via its own `h-full`/`flex-1`), leaving a bare 72px gap before the next section. `SectionBoundary`'s fallback `Card` never had that same sizing treatment. Fixed by adding `h-full` and `justify-center` to the fallback `Card` (already had `items-center` for horizontal centering; needed `justify-center` too, for vertical) — one shared component, so the fix applies uniformly to every dashboard section without per-section changes. Verified the fix in both directions: `OrderStatusBreakdown` (success) / `TopProducts` (fail) — error card now exactly 230px, matching its sibling; and the reverse, `RecentOrdersList` (fail) / `RecentActivityFeed` (success, and normally the *shorter* of that pair) — confirmed via screenshot that this pairing, which would have shown an even larger gap pre-fix, now aligns perfectly too. Also re-verified the "everything fails at once" scenario (matching the second provided screenshot) still renders cleanly post-fix — no regression from adding `h-full` to a component that sometimes has no taller sibling to stretch against.
+
+**Bug 2 (found by testing, not visible in the screenshots): a failed `OrdersResults` on the orders page wiped out `FiltersBar` entirely, defeating the whole reason that component was split out.** `app/orders/page.tsx`'s own code comment already *documented* this as an accepted limitation ("error.tsx still covers the whole route... regardless of the Suspense boundary in between") — but confirmed directly what that actually looks like: forcing `getOrders()` to fail replaced the *entire page*, search box and all, with the route-level `error.tsx` card. This is the identical disruption the "clunky filter" fix (extracting `OrdersResults` into its own Suspense boundary, a session or two ago) already fixed for the *loading* case — `Suspense` only catches a thrown promise, not a thrown error, so an error still propagates straight past it to the nearest actual error boundary. Fixed by wrapping `OrdersResults` in the dashboard's existing `SectionBoundary` (already a shared, generic component, not dashboard-specific despite its current callers) — reusing it rather than inventing a second error-isolation mechanism. `app/orders/error.tsx` still exists as the genuine last resort for anything outside `OrdersResults`.
+
+**Retry mechanism, verified end to end, not just present:**
+- Typed into the search box while `OrdersResults` was erroring — text stayed, input kept focus, cursor position intact; the debounced URL update then re-triggered (and re-failed) *only* the results section, `FiltersBar` completely unaffected
+- Clicked Retry on the orders page — a genuinely new fetch attempt occurred (console error count increased, matching the forced failure firing again), `FiltersBar`'s typed text was still there afterward
+- Flipped `getOrders` to succeed and clicked Retry again — recovered correctly, rendering the real (in this case, correctly empty — the test search term matched nothing) result
+- On the dashboard, with all 6 sections failing at once, clicked each section's Retry individually and confirmed each recovers **only when its own Retry is clicked** — clicking one does trigger `router.refresh()` (which re-fetches every section's data, exactly as `SectionBoundary`'s own comment already documents), but a section whose own `key` didn't change keeps rendering its *stale* cached error state even though fresher data was just reconciled into its unrendered `children` — confirmed this is the actual, working-as-designed behavior, not a bug, by clicking through all 6 individually and watching each recover one at a time until the full dashboard matched its original clean state exactly
+
+**Left `DEFAULT_FAIL_RATE` as the user's own current value, not reverted to `0`.** Attempted to revert it to `0` (matching the code's own comment: "Defaults to 0 so normal use... is reliable") as the last cleanup step, the same way every other temporary test change this session was reverted — but the user was actively editing `lib/api/client.ts` in their own IDE at that exact moment and set it back to `0.5` immediately after. Left it alone rather than re-reverting a live, deliberate edit — flagged to the user directly instead (a `0.5` global fail rate is good for continued testing, but would make the live app fail roughly half the time if left in place for grading/submission).
+
+**Verification.** `npm run build`/`npm run lint`/`npm test` all clean throughout and at the end (routes unchanged, same one pre-existing warning, all 29 tests passing — none of this touched tested logic).
+
+**Commands run:**
+```
+# read lib/api/client.ts, section-boundary.tsx, error-boundary.tsx,
+# app/page.tsx, app/orders/page.tsx, app/orders/error.tsx first
+
+# temporarily: DEFAULT_FAIL_RATE = 0; getOrderStatusBreakdown → failRate 0;
+# getTopProducts → failRate 1 (deterministic repro of the screenshots)
+npx tsc --noEmit    # clean
+npm run dev &
+
+# via Playwright MCP: 1440x1200, navigate /, screenshot
+# → reproduced exactly: Order status normal height, Top products error
+#   card visibly short with a gap below it before Recent orders
+
+browser_evaluate(() => { /* getBoundingClientRect() + getComputedStyle()
+  on both column divs, both sections, both cards */ })
+# → errorCard height 158, its column 230 (matching sibling), confirmed
+#   real: 72px gap, not a rendering/screenshot artifact
+
+# fixed: added h-full + justify-center to SectionBoundary's fallback Card
+npx tsc --noEmit   # clean
+# re-navigated, re-screenshotted, re-measured
+# → errorCard height now 230, exactly matching its sibling
+
+# reverted the two analytics.ts overrides; added getOrders → failRate 1
+# (isolates the orders-page + reversed-pairing tests without touching
+# getOrders permanently)
+# navigated /, screenshotted → confirmed RecentOrders(fail)/RecentActivity
+#   (succeed) pairing also now aligns correctly
+# navigated /orders → confirmed FiltersBar disappeared entirely, replaced
+#   by the whole-route error.tsx card (bug 2, found by testing)
+
+# fixed: wrapped OrdersResults in SectionBoundary in app/orders/page.tsx
+npx tsc --noEmit   # clean
+# re-navigated /orders → confirmed FiltersBar now stays mounted, only
+#   the results area shows the error card
+
+# typed in the search box mid-error, confirmed text+focus persisted
+#   through the debounced re-fetch/re-fail
+# clicked Retry, confirmed a new fetch attempt (console error count rose)
+#   and FiltersBar's typed text was untouched afterward
+# reverted getOrders' override to succeed; clicked Retry again
+#   → recovered correctly (real EmptyState rendered)
+
+# DEFAULT_FAIL_RATE = 1 (global): navigated / → confirmed all 6 sections
+#   fail cleanly with matched heights throughout (no regression from the
+#   h-full fix on standalone, non-paired sections)
+# DEFAULT_FAIL_RATE = 0: clicked each of the 6 sections' own Retry button
+#   individually, confirmed each recovers only on its own click, full
+#   dashboard matches original state after all 6 clicked
+
+# resized to 375px, re-navigated with getTopProducts forced to fail
+#   → confirmed mobile (single-column, no stretch-pairing possible)
+#   already rendered correctly, no changes needed there
+
+npm run build && npm run lint && npm test   # all clean
+rm -rf .playwright-mcp
+pkill -9 -f "next-server"; pkill -9 -f "next dev"
+
+# reverted lib/api/analytics.ts and lib/api/client.ts's DEFAULT_FAIL_RATE
+# fully — confirmed via git diff; DEFAULT_FAIL_RATE was then independently
+# set back to 0.5 by the user in their own IDE, left as-is
+```
+
+**How this moves the build forward:** two real bugs fixed — one purely visual (a missing `h-full`/`justify-center` on a shared fallback component, now correctly sized in every context that uses it), one architectural (an error-isolation gap that exactly mirrored a loading-isolation bug already fixed once before, now closed the same way with the same shared component). Both were found by actually forcing and observing failures end to end, not by reading the code and assuming it was fine — consistent with this session's established discipline, and `SectionBoundary` is now confirmed to correctly protect both the loading *and* the error case, on both pages, not just the page it was originally built for.

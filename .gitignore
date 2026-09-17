@@ -39,6 +39,12 @@ yarn-error.log*
 # claude code skills (solo project — not shared with a team)
 .claude/
 
+# claude code MCP server config — personal dev tooling, same reasoning as .claude/
+.mcp.json
+
+# playwright MCP server's own working files (page snapshots, console logs)
+.playwright-mcp/
+
 # employer's task spec — kept locally for reference, not published
 Frontend_Task1_Analytics_Dashboard.pdf
 

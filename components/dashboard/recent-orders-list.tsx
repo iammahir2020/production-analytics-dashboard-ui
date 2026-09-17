@@ -45,24 +45,35 @@ export async function RecentOrdersList() {
   );
 }
 
+// Row padding (py-2.5) and bar height (h-5, matching text-sm's real 20px
+// line-height) mirror RecentOrderRow's actual cells, and a header-row
+// placeholder mirrors the real <thead> — both gaps (shorter bars, a
+// missing header) were caught by measuring the real loading state, not
+// assumed; see learn.md.
 export function RecentOrdersListSkeleton() {
   return (
     <section className="flex flex-col gap-3">
       <SectionHeading>Recent orders</SectionHeading>
       <Card className="overflow-hidden py-0">
         <div className="flex flex-col">
+          <div className="flex items-center gap-4 border-b border-grid-line px-4 pt-4 pb-2">
+            <Skeleton className="h-5 w-10 shrink-0" />
+            <Skeleton className="h-5 w-20 flex-1" />
+            <Skeleton className="h-5 w-12 shrink-0" />
+            <Skeleton className="h-5 w-12 shrink-0" />
+          </div>
           {Array.from({ length: RECENT_LIMIT }).map((_, index) => (
             <div
               key={index}
               className={cn(
-                "flex items-center gap-4 px-4 py-3",
+                "flex items-center gap-4 px-4 py-2.5",
                 index !== RECENT_LIMIT - 1 && "border-b border-grid-line"
               )}
             >
-              <Skeleton className="h-3.5 w-12 shrink-0" />
-              <Skeleton className="h-3.5 w-32 flex-1" />
-              <Skeleton className="h-3.5 w-16 shrink-0" />
-              <Skeleton className="h-3.5 w-14 shrink-0" />
+              <Skeleton className="h-5 w-12 shrink-0" />
+              <Skeleton className="h-5 w-32 flex-1" />
+              <Skeleton className="h-5 w-16 shrink-0" />
+              <Skeleton className="h-5 w-14 shrink-0" />
             </div>
           ))}
         </div>
