@@ -1,4 +1,6 @@
+import { Package } from "lucide-react";
 import { getOrders } from "@/lib/api/orders";
+import { EmptyState } from "@/components/shared/empty-state";
 import { SectionHeading } from "@/components/shared/section-heading";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -17,6 +19,27 @@ const RECENT_LIMIT = 8;
 // column alone.
 export async function RecentOrdersList() {
   const { orders } = await getOrders({ pageSize: RECENT_LIMIT });
+
+  // An empty result is a successful response, not a failure — rendering
+  // the <thead> with nothing under it reads as broken, and letting
+  // SectionBoundary's error card handle it would claim the fetch failed
+  // when it didn't. No filters exist on this dashboard widget, so there's
+  // nothing to offer as a corrective action (unlike OrdersTable's "Clear
+  // filters") — just an honest statement of what the data says.
+  if (orders.length === 0) {
+    return (
+      <section className="flex flex-col gap-3">
+        <SectionHeading>Recent orders</SectionHeading>
+        <Card>
+          <EmptyState
+            icon={<Package className="size-6 text-muted-foreground" aria-hidden="true" />}
+            title="No orders yet"
+            className="py-10"
+          />
+        </Card>
+      </section>
+    );
+  }
 
   return (
     <section className="flex flex-col gap-3">

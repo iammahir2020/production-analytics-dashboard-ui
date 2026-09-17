@@ -1,6 +1,8 @@
+import { ChartPie } from "lucide-react";
 import { getOrderStatusBreakdown } from "@/lib/api/analytics";
 import { formatPercent } from "@/lib/format";
 import { NEGATIVE_ORDER_STATUSES, ORDER_STATUS_STYLES } from "@/components/orders/order-status";
+import { EmptyState } from "@/components/shared/empty-state";
 import { SectionHeading } from "@/components/shared/section-heading";
 import { StatusDonut } from "@/components/dashboard/status-donut";
 import { Card, CardContent } from "@/components/ui/card";
@@ -20,6 +22,26 @@ export async function OrderStatusBreakdown() {
     .filter((point) => NEGATIVE_ORDER_STATUSES.has(point.status))
     .reduce((sum, point) => sum + point.count, 0);
   const cancellationRate = total > 0 ? negativeCount / total : 0;
+
+  // getOrderStatusBreakdown always returns all 5 statuses, so the array is
+  // never empty — total === 0 is what "no data" actually looks like here.
+  // Worth catching: Recharts draws no arcs at all when every value is 0,
+  // so the real render would be a blank 160px square beside a legend of
+  // zeros, which reads as a broken chart rather than an empty one.
+  if (total === 0) {
+    return (
+      <section className="flex h-full flex-col gap-3">
+        <SectionHeading>Order status</SectionHeading>
+        <Card className="flex-1">
+          <EmptyState
+            icon={<ChartPie className="size-6 text-muted-foreground" aria-hidden="true" />}
+            title="No orders to break down"
+            className="py-10"
+          />
+        </Card>
+      </section>
+    );
+  }
 
   return (
     // h-full + Card/CardContent flex-1: this section's neighbor in the

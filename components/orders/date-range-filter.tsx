@@ -8,16 +8,9 @@ import { useOrderFiltersUrl } from "@/hooks/use-order-filters";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { parseDateParam } from "@/lib/date-params";
 import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
-
-function parseUrlDate(value: string): Date | undefined {
-  if (!value) return undefined;
-  // Midday, not midnight — avoids the date shifting a day back in any
-  // timezone west of UTC when the Date is later formatted/displayed.
-  const date = new Date(`${value}T12:00:00`);
-  return Number.isNaN(date.getTime()) ? undefined : date;
-}
 
 function toUrlDate(date: Date): string {
   return format(date, "yyyy-MM-dd");
@@ -42,8 +35,8 @@ export function DateRangeFilter() {
   // date-range pickers use, sidesteps that ambiguity entirely: the user
   // decides when the selection is done, not a heuristic guessing at it.
   const [range, setRange] = useState<DateRange | undefined>({
-    from: parseUrlDate(filters.from),
-    to: parseUrlDate(filters.to),
+    from: parseDateParam(filters.from),
+    to: parseDateParam(filters.to),
   });
 
   // Resyncs the draft selection when the URL's from/to change for a
@@ -54,14 +47,14 @@ export function DateRangeFilter() {
   const [prevUrlRange, setPrevUrlRange] = useState({ from: filters.from, to: filters.to });
   if (filters.from !== prevUrlRange.from || filters.to !== prevUrlRange.to) {
     setPrevUrlRange({ from: filters.from, to: filters.to });
-    setRange({ from: parseUrlDate(filters.from), to: parseUrlDate(filters.to) });
+    setRange({ from: parseDateParam(filters.from), to: parseDateParam(filters.to) });
   }
 
   // Reopening resyncs the draft to whatever's currently applied — closing
   // without applying (Escape, clicking outside) shouldn't leave a half-made
   // selection sitting there for next time.
   function handleOpenChange(next: boolean) {
-    if (next) setRange({ from: parseUrlDate(filters.from), to: parseUrlDate(filters.to) });
+    if (next) setRange({ from: parseDateParam(filters.from), to: parseDateParam(filters.to) });
     setOpen(next);
   }
 

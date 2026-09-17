@@ -183,6 +183,17 @@ Each step is a single, reviewable unit of work. Check it off after reviewing, th
 
 🔖 **Suggested commit point** — accessibility pass complete.
 
+## Phase 8b — Task-PDF audit gaps (empty responses & unexpected data)
+
+> **Why this phase exists.** Re-read `Frontend_Task1_Analytics_Dashboard.pdf` end to end and audited the build against every line of it before writing the README. Everything in Requirements / Architecture & React checked out; the gaps all sit under one Data & API line — *"Handle API loading, errors, **empty responses**, and **unexpected data**."* Loading and errors were solid; the other two had real holes, each confirmed by forcing the condition and watching it, not by reading the code. Numbered 50.x so Phase 9/10 don't shift, same decimal-insertion convention Phase 2b/2c used.
+
+- [x] 50.1. **Empty responses on the dashboard.** `EmptyState` exists and is used well, but only by `OrdersTable` — forcing empty API responses leaves Top products as a bare heading with nothing under it, Recent orders as a header row with no body, and Recent activity as an empty sliver. Reuse the existing shared component in all of them rather than inventing per-section variants
+- [x] 50.2. **`RevenueChart` crashes on empty data.** `data[data.length - 1]` → `lastPoint.date` throws `TypeError: Cannot read properties of undefined`. `SectionBoundary` catches it, but then displays "Couldn't load charts" — reporting a *failure* when the fetch actually succeeded and returned nothing, which is exactly the empty-vs-error distinction the PDF separates. Guard it so an empty series renders an empty state, not a false error
+- [x] 50.3. **Unvalidated date params take down the whole orders page.** `/orders?from=banana` → `RangeError: Invalid time value` (date-fns `format()` on an Invalid Date, from `DateRangeFilter`'s trigger label) → route-level `error.tsx` replaces the entire page, FiltersBar included, and Retry can never recover it because the bad param stays in the URL. Validate `from`/`to` in `parseFilters` the same way `status`/`page`/`pageSize` already are, and make the client-side label resilient. Also fix the now-stale comment there claiming date params need no validation because `<input type="date">` produces well-formed values — that input was replaced by the Calendar in a later phase, and it never covered hand-edited or shared URLs anyway
+- [x] 50.4. **No `not-found.tsx`.** `notFound()` is called for an unknown order id, but with no not-found UI the app falls back to Next.js's unstyled default 404 — no Khata styling, no explanation, no way back to the orders list. The one screen that looks unfinished
+
+🔖 **Suggested commit point** — audit gaps closed; every task-PDF requirement verifiably covered.
+
 ## Phase 9 — README
 
 - [ ] 51. Write `README.md`: setup, architecture/folder structure, API/data-fetching approach, Server vs Client Component explanation, performance decisions, testing approach, key implementation notes (decision log), AI-assisted development section

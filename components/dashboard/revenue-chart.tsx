@@ -26,7 +26,10 @@ interface RevenueChartProps {
 }
 
 export function RevenueChart({ data, className }: RevenueChartProps) {
-  const lastPoint = data[data.length - 1];
+  // .at(-1), not [data.length - 1]: it's typed `RevenuePoint | undefined`,
+  // so the empty case is visible to the type checker rather than only at
+  // runtime (this project doesn't run noUncheckedIndexedAccess).
+  const lastPoint = data.at(-1);
 
   return (
     <ChartContainer
@@ -91,15 +94,22 @@ export function RevenueChart({ data, className }: RevenueChartProps) {
         />
         {/* "An emphasized endpoint" per the confirmed direction — the
             latest day stands out rather than blending into 90 plotted
-            points. */}
-        <ReferenceDot
-          x={lastPoint.date}
-          y={lastPoint.revenue}
-          r={4}
-          fill="var(--color-revenue)"
-          stroke="var(--background)"
-          strokeWidth={2}
-        />
+            points. Guarded: `data` is an ordinary array prop, and an empty
+            one made this throw on `lastPoint.date` — which SectionBoundary
+            then reported as "Couldn't load charts", claiming a failure for
+            a fetch that actually succeeded and returned nothing. Callers
+            render their own empty state (see ChartsSection); this just
+            keeps the component itself safe for any input it accepts. */}
+        {lastPoint && (
+          <ReferenceDot
+            x={lastPoint.date}
+            y={lastPoint.revenue}
+            r={4}
+            fill="var(--color-revenue)"
+            stroke="var(--background)"
+            strokeWidth={2}
+          />
+        )}
       </AreaChart>
     </ChartContainer>
   );

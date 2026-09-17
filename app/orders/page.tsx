@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { FiltersBar } from "@/components/orders/filters-bar";
 import { OrdersResults, OrdersResultsSkeleton } from "@/components/orders/orders-results";
 import { SectionBoundary } from "@/components/shared/section-boundary";
+import { sanitizeDateParam } from "@/lib/date-params";
 import { ORDER_PAGE_SIZE_OPTIONS, ORDER_STATUSES, type OrderFilters, type OrderStatus } from "@/lib/types/order";
 
 // Same reasoning as the dashboard (app/page.tsx): getOrders() goes through
@@ -9,14 +10,22 @@ import { ORDER_PAGE_SIZE_OPTIONS, ORDER_STATUSES, type OrderFilters, type OrderS
 // data anyway — this route can't be meaningfully static-prerendered at all.
 export const dynamic = "force-dynamic";
 
-// Validated against the closed OrderStatus enum rather than cast blindly —
-// a mistyped or hand-edited query string should fall back to "all", not
-// silently produce a filter that matches nothing. Date params aren't
-// validated: FiltersBar's <input type="date"> always produces well-formed
-// values, so there's no real source of malformed ones to guard against.
-// pageSize is validated the same way status is — against the one closed
-// list of offered choices (ORDER_PAGE_SIZE_OPTIONS) — so a hand-edited
-// URL can't request some arbitrary huge page size the UI never offered.
+// Every param is validated rather than cast blindly — a mistyped or
+// hand-edited query string should fall back to a sane default, not
+// silently produce a filter that matches nothing. `status` is checked
+// against the closed OrderStatus enum, `pageSize` against the one closed
+// list of choices the UI actually offers (ORDER_PAGE_SIZE_OPTIONS, so a
+// hand-edited URL can't request an arbitrary huge page), and `from`/`to`
+// through the shared parseDateParam.
+//
+// The date check was added later, in the task-PDF audit. The comment here
+// used to argue it was unnecessary because FiltersBar's
+// <input type="date"> could only ever produce well-formed values — which
+// stopped being true when the Calendar replaced that input, and was never
+// true of URLs people edit or share. Unvalidated, `?from=banana` reached
+// date-fns' format() as an Invalid Date and threw, taking the whole page
+// down. Left as a note rather than quietly corrected: a stale "why this
+// is safe" comment is worth more as a warning than deleted.
 function parseFilters(searchParams: Record<string, string | string[] | undefined>): OrderFilters {
   const get = (key: string) => {
     const value = searchParams[key];
@@ -30,8 +39,8 @@ function parseFilters(searchParams: Record<string, string | string[] | undefined
   return {
     search: get("q"),
     status: status && ORDER_STATUSES.includes(status as OrderStatus) ? (status as OrderStatus) : "all",
-    dateFrom: get("from"),
-    dateTo: get("to"),
+    dateFrom: sanitizeDateParam(get("from")),
+    dateTo: sanitizeDateParam(get("to")),
     page: Number.isFinite(page) && page > 0 ? page : undefined,
     pageSize: (ORDER_PAGE_SIZE_OPTIONS as readonly number[]).includes(pageSize) ? pageSize : undefined,
   };

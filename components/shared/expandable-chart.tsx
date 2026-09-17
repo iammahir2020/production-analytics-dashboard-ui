@@ -26,6 +26,22 @@ interface ExpandableChartProps {
   expanded: ReactNode;
 }
 
+// The panel header, shared by all three states a chart panel can be in:
+// loaded (below), loading, and empty (both in charts-section.tsx).
+// Extracted at the third call site, not the second — the same rule
+// formatShortDate was extracted under. It matters more than usual here:
+// the skeleton audit found several placeholders that had silently drifted
+// from the real content they stood in for, and a duplicated header is
+// exactly how that happens again.
+export function ChartPanelHeader({ title, meta }: { title: string; meta?: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-2 px-3 pt-2.5 pb-1">
+      <span className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">{title}</span>
+      {meta && <span className="font-mono text-[11px] text-muted-foreground">{meta}</span>}
+    </div>
+  );
+}
+
 // Houses one chart in a bordered panel with a header (title + meta) and an
 // always-visible corner control to view it full-size in a dialog. Hover-
 // gated would be undiscoverable on a dashboard and dead on touch, so the
@@ -34,10 +50,7 @@ interface ExpandableChartProps {
 export function ExpandableChart({ title, meta, children, expanded }: ExpandableChartProps) {
   return (
     <Card className="gap-0 py-0">
-      <div className="flex items-baseline justify-between gap-2 px-3 pt-2.5 pb-1">
-        <span className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">{title}</span>
-        {meta && <span className="font-mono text-[11px] text-muted-foreground">{meta}</span>}
-      </div>
+      <ChartPanelHeader title={title} meta={meta} />
       <Dialog>
         <div className="relative px-1 pb-1">
           {children}

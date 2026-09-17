@@ -2097,6 +2097,8 @@ pkill -9 -f "next-server"; pkill -9 -f "next dev"
 # set back to 0.5 by the user in their own IDE, left as-is
 ```
 
+**How this moves the build forward:** two real bugs fixed — one purely visual (a missing `h-full`/`justify-center` on a shared fallback component, now correctly sized in every context that uses it), one architectural (an error-isolation gap that exactly mirrored a loading-isolation bug already fixed once before, now closed the same way with the same shared component). Both were found by actually forcing and observing failures end to end, not by reading the code and assuming it was fine — consistent with this session's established discipline, and `SectionBoundary` is now confirmed to correctly protect both the loading *and* the error case, on both pages, not just the page it was originally built for.
+
 ## Phase 7 — Performance Pass (steps 44–49b)
 
 **What was done:** a real audit against the actual code, not a speculative pass adding memoization "just in case" — went through every client component and hook, `app/page.tsx` and `app/orders/[id]/page.tsx`'s fetch structure, and `package.json`, checking each one against a concrete question rather than a checklist. Found and fixed one real issue; everything else was already correct, and that's recorded too — a "nothing to fix here, and here's why" is as much a decision as a fix.
@@ -2228,4 +2230,112 @@ pkill -f "next-server"; pkill -f "next dev"; pkill -f "next start"
 
 **How this moves the build forward:** four real accessibility gaps closed, and one of them — the calendar's arrow-key navigation — was a genuine functional block for keyboard-only users, not a labeling nicety, found only because arrow-key navigation was actually tested rather than assumed to work from the presence of `role="grid"` and roving `tabindex` in the markup. The root-cause trace (capture-phase event spy → real-focus check → fiber-props check → the `autoFocus` red herring → the missing `ref`) is worth remembering as a template for "the markup looks right but the behavior doesn't happen" bugs generally: confirm the event fires, confirm it's not consumed early, then check whether anything downstream actually acts on the resulting state — in this case, nothing did, because the one line that would have was never written. Phase 9 (README) is next.
 
-**How this moves the build forward:** two real bugs fixed — one purely visual (a missing `h-full`/`justify-center` on a shared fallback component, now correctly sized in every context that uses it), one architectural (an error-isolation gap that exactly mirrored a loading-isolation bug already fixed once before, now closed the same way with the same shared component). Both were found by actually forcing and observing failures end to end, not by reading the code and assuming it was fine — consistent with this session's established discipline, and `SectionBoundary` is now confirmed to correctly protect both the loading *and* the error case, on both pages, not just the page it was originally built for.
+## Phase 8b — Task-PDF audit gaps (steps 50.1–50.4)
+
+**What prompted it:** before writing the README, re-read `Frontend_Task1_Analytics_Dashboard.pdf` line by line and audited the build against every requirement in it — not from memory of what was built, but by actually exercising each one against a running production server.
+
+**What already passed, verified rather than assumed:** all four required KPIs (revenue, orders, active customers, conversion rate) plus AOV; both charts; recent orders and system activity; the orders page's full set (search, status, date, pagination, details); per-section skeletons; error handling; responsive. On the Data & API side, `grep -rn "lib/data\|mock-.*\.json" app components hooks` returned nothing, which is the real check behind "don't hardcode data inside UI components" and "keep API calls, types and transformation separate" — no UI file imports a dataset. On Architecture & React, `useEffect` is used twice and both are justified, `useCallback` is in `useOrderFiltersUrl`, `React.memo` is on `OrderRow`, and Phase 7 already confirmed no duplicate fetches.
+
+**Where the gaps were, all under one line of the PDF:** *"Handle API loading, errors, **empty responses**, and **unexpected data**."* Loading and errors were genuinely solid — they'd each had a whole phase. The other two words had never been tested at all. Four findings, each confirmed by forcing the condition and watching the result, then re-confirmed fixed the same way.
+
+**50.1 — empty responses had no UI on the dashboard.** `EmptyState` existed and was good, but only `OrdersTable` used it. Forcing every dashboard fetch to return `[]` showed Top products as a bare heading with nothing beneath it, Recent orders as a `<thead>` with no rows, and Recent activity as an empty sliver of a card — three sections that look broken rather than empty. Fixed by reusing the existing shared component in all of them (plus `OrderStatusBreakdown`, whose empty case is `total === 0` rather than an empty array — the API always returns all five statuses, and Recharts draws no arcs at all when every value is 0, so the real render would have been a blank 160px square beside a legend of zeros).
+
+One deliberate non-change: `SummaryCards` gets no empty state. With no orders it shows ৳0.00 / 0 / 0 / 0.0% — zeros are a correct and meaningful answer for a KPI, not an absence of one. Adding an empty state there would have been consistency for its own sake.
+
+`EmptyState` gained one optional `className` prop for padding: its default `py-16` is sized for the full-width orders table and dwarfs a five-row dashboard panel. One prop, three real call sites, rather than a second component.
+
+**50.2 — an empty series didn't just render badly, it crashed.** `RevenueChart` did `data[data.length - 1]` then read `lastPoint.date`, throwing `TypeError: Cannot read properties of undefined` on an empty array. `SectionBoundary` caught it, so the page survived — but it then displayed **"Couldn't load charts"**, reporting a *failure* for a fetch that had succeeded and returned nothing. That's exactly the distinction the PDF draws by listing errors and empty responses separately, and it's the worse kind of bug: the safety net made it look handled.
+
+Fixed in two parts. `ChartsSection` owns the "what does empty mean here" decision (both charts read the same series, so they're empty together) and renders the panels with an empty state inside — header, meta and border unchanged, so the dashboard's shape doesn't shift between states. `RevenueChart` separately guards its own `ReferenceDot`, since `data` is an ordinary array prop and an empty array is a legitimate input for it regardless of caller. Switched to `data.at(-1)` rather than keeping the index access with a truthiness check: `.at()` is typed `RevenuePoint | undefined`, so the empty case is visible to the type checker instead of only at runtime (this project doesn't run `noUncheckedIndexedAccess`).
+
+That put a third copy of the chart-panel header in the file (loaded, loading, empty), so it was extracted to `ChartPanelHeader` — the same third-call-site rule `formatShortDate` was extracted under, and it matters more than usual here: the skeleton audit had already found several placeholders that had silently drifted from the content they stood in for, and a duplicated header is precisely how that happens again.
+
+**50.3 — the real one: a hand-edited date param took down the whole orders page.** `/orders?from=banana` → `RangeError: Invalid time value`, thrown by date-fns' `format()` on an Invalid Date inside `DateRangeFilter`'s trigger label → the route-level `error.tsx` replaced the entire page, FiltersBar included. And it was unrecoverable: the bad param stays in the URL, so Retry re-renders and re-throws forever. A user reaching that URL from a stale bookmark or a shared link has no way out but editing the address bar.
+
+`parseFilters` already validated `status` against the closed enum and `pageSize` against the offered options — the date params were the one unguarded input, and the comment there explained why: `<input type="date">` can only produce well-formed values. That reasoning was true when written and silently stopped being true when the Calendar replaced that input two phases earlier; it was never true of URLs people type or share. A stale "why this is safe" comment is more dangerous than no comment, so the replacement explicitly records that it was wrong and why, rather than quietly deleting it.
+
+Fixed by extracting the safe parser `DateRangeFilter` already had into `lib/date-params.ts`, shared by all three readers of these params: server-side `parseFilters`, the `useOrderFiltersUrl` hook, and the picker itself. The hook is the important one — it's where the URL becomes app state, so a malformed value now stops being malformed at that line rather than at whichever consumer touches it first, exactly mirroring how an unknown status already falls back to `"all"`. An unusable date is dropped (treated as no filter) rather than applied, which also avoids the misleading alternative: unvalidated, `new Date("banana")` made every comparison false and filtered *every* order out, so the page would have said "No orders match your filters" about a filter the user never set.
+
+The shared parser keeps both of the original's checks, and the comment now says why both are needed: the `yyyy-MM-dd` pattern alone accepts `2026-13-45`, and `Date.parse` alone accepts plenty this app never writes (`"Dec 2026"`, full ISO timestamps) which would then round-trip into the URL in a shape the picker can't read back. It also keeps the midday-not-midnight parse — a bare `yyyy-MM-dd` parses as UTC, so midnight shifts back a day in any timezone west of UTC, which matters for a reviewer opening the deployed link from the US.
+
+**50.4 — no `not-found.tsx`.** `notFound()` was called for an unresolvable order (and for an unresolvable customer), but with no not-found boundary anywhere the app fell through to Next.js's own default 404: unstyled system font, no explanation, no way back. The root layout still rendered, so the header was there, which arguably made it worse — the one screen in the app that looked unfinished, sitting inside otherwise-finished chrome. Added a single global `app/not-found.tsx` rather than a per-route one: Next.js walks up to the nearest boundary, so one file covers both the bad-order-id case and genuinely unknown URLs, and the copy is honest for either. The two links out are the actual point — "not found" with no exit is a dead end, and this is a screen a user can reach without doing anything wrong.
+
+**One honest non-fix, recorded rather than hidden:** `/orders/ord_9999` returns HTTP **200**, not 404. `loading.tsx` on that route creates a Suspense boundary, so the shell (and its status line) flushes before the page's own fetch resolves and calls `notFound()`. Making it a true 404 means giving up streaming on that route — a real TTFB and loading-skeleton benefit — to fix a status code no user sees, and the rendered result is correct either way. Left as-is deliberately; noting it because "we never checked" and "we checked and chose this" are different things.
+
+**Verification:** every fix confirmed the same way it was found — forced the condition against a production build and looked. Empty responses: all five sections render their empty state, no crash, no false error card. Bad date param: page renders completely, filters intact, trigger back to its neutral "Date range" label, orders listed. Unknown order: styled 404 with both links. Then reverted every forced-empty patch and re-confirmed the normal dashboard renders identically, chart endpoint dot included. `git diff --stat lib/api/` empty afterwards, so no test scaffolding survived. `tsc --noEmit`, `npm run lint` (one pre-existing unrelated warning), `npm test` 29/29, `npm run build` all clean.
+
+**Commands run:**
+```
+# audit
+grep -rn "lib/data\|mock-.*\.json" app components hooks   # → nothing in UI
+git remote -v && git log origin/main --oneline -1          # repo pushed, in sync
+find app -type f -name "*.tsx"                             # → no not-found.tsx
+
+# forced-empty test (temporary patches to lib/api/*, reverted after)
+npm run build && npm run start &
+curl -s http://localhost:3000 ... ; grep -i error /tmp/empty-test.log
+# → ⨯ TypeError: Cannot read properties of undefined (reading 'date')
+# Playwright: full-page screenshot → 3 sections visibly blank,
+#   charts panel showing a false "Couldn't load charts"
+
+curl "http://localhost:3000/orders?from=banana"
+# → page renders, but console: RangeError: Invalid time value
+#   → whole route replaced by error.tsx, FiltersBar gone, Retry can't recover
+curl "http://localhost:3000/orders/ord_9999"
+# → HTTP 200, Next.js default unstyled 404
+
+# fixes, then re-verified the same way
+npx tsc --noEmit && npm run lint && npm test && npm run build   # clean
+# Playwright, forced-empty build: all 5 sections show proper empty states
+# Playwright, real build: ?from=banana renders full page, filters intact
+#                        /orders/ord_9999 → styled 404 with two links out
+#                        dashboard unchanged vs before (endpoint dot present)
+git diff --stat lib/api/    # empty — no scaffolding left behind
+rm -rf .playwright-mcp; pkill -f "next-server"
+```
+
+**How this moves the build forward:** every line of the task PDF is now verifiably covered, and the gaps it surfaced were all in the same blind spot — the two words in one requirement (`empty responses`, `unexpected data`) that had never been exercised, versus loading and errors which had each had a dedicated phase. Worth generalising: the requirements that get tested are the ones with an obvious way to trigger them, and the ones that quietly rot are those needing a condition you have to manufacture. The `RevenueChart` case is the sharpest example — an error boundary caught the crash and printed a confident, wrong explanation, so from the outside it looked like handled behaviour rather than a bug. Phase 9 (README) is next, and it now has a genuine story to tell about why there's no `useMemo` in the codebase: all derived data is computed server-side in `lib/api/`, so there is nothing client-side to memoize, and adding one would violate the PDF's own "not unnecessarily" clause.
+
+## Phase 8b follow-up — responsive/performance/accessibility pass on the audit fixes
+
+**What prompted it:** requested explicitly, before moving to the README — a targeted re-audit of the four fixes just made (empty states, the chart crash guard, date-param validation, `not-found.tsx`), on the same three axes every other visual phase has been checked against, rather than assuming they inherited correctness from the components they reused.
+
+**Found one real bug, in code that hadn't existed an hour earlier.** `app/not-found.tsx` renders its two actions as `<Button render={<Link .../>}>` — Base UI's documented pattern for styling a link like a button. But `Button`'s own `nativeButton` prop defaults to `true`, and nothing here overrode it, so Base UI assumed it was still going to render a `<button>` even though the actual output is an `<a>`. Confirmed via the browser console, not just by reading the type: two dev-mode errors on every load of the 404 page — *"A component that acts as a button expected a native `<button>` because the `nativeButton` prop is true... impact forms and accessibility."* This wasn't cosmetic — `useButton`'s internal keyboard-activation logic branches on `isNativeButton`, so the mislabeling could affect how Base UI's own Space/Enter handling treats the element, on top of the console noise. Fixed with `nativeButton={false}` on both, plus a comment explaining why Base UI can't infer this on its own (it decides before it has any DOM node to check). Re-verified: 0 console errors, both render as genuine `<a href>` elements, and a full keyboard round-trip (focus the link, press Enter) actually navigates to `/orders`.
+
+**Responsive:** screenshotted the empty dashboard (all 5 sections + both chart panels) at 375px, 768px, and 1440px. Clean at every width — single-column stacking on mobile/tablet with no overflow, and at desktop the empty-state icon+text stays centered and doesn't look lost even in the widest panels (Top products at 8/12, Recent orders at 7/12). `not-found.tsx` checked at 375px: the two-button row fits without wrapping, card doesn't overflow. Confirmed the pre-existing `OrdersTable` empty state (untouched by this round, but now sharing the `className`-extended `EmptyState`) still renders identically — no regression from the shared component's new prop.
+
+**Performance:** compared first-load JS before/after via the same `.next/diagnostics/route-bundle-stats.json` check Phase 7 used. All four routes grew by ~1.5–2.7KB uncompressed (`/`: +2,201 · `/orders`: +2,740 · `/orders/[id]`: +2,167 · `/_not-found`: +1,559) — `EmptyState` (a Client Component) now reaching three more Server Component call sites it didn't before, plus six new lucide icons. Expected and negligible next to Phase 7's ~74KB win; not worth chasing further. No new re-render or duplicate-fetch surface: every changed component is still an async Server Component executing once per request, so there's nothing for `useMemo`/`useCallback` to protect here — consistent with the Phase 7 finding that this codebase's server-side data shape leaves nothing client-side to memoize. Also confirmed `EmptyChartPanel` correctly omits `ExpandableChart`'s expand button (nothing to expand when there's no data) — checked directly in the rendered screenshot, not assumed from the code.
+
+**Accessibility:** every new icon (`Package`, `PackageOpen`, `History`, `ChartPie`, `ChartSpline`, `FileQuestion`) is `aria-hidden`, matching the convention already used everywhere else in the app — checked with a grep across all five changed files, not spot-checked. `not-found.tsx` intentionally has no `<h1>`, matching the existing convention in `app/error.tsx`/`app/orders/error.tsx`/`app/orders/[id]/error.tsx` — none of them carry a heading, since they're transient state cards rather than routes with their own content hierarchy, and a not-found page in particular can't know which route it's replacing to emit a sensible route-specific `sr-only` one. The `nativeButton` fix above is this section's real finding; separately confirmed a visible focus ring renders on the "Back to orders" link (screenshotted, not just read from computed styles) and that Tab reaches it in document order.
+
+**Verification:** `npx tsc --noEmit`, `npm run lint` (same one pre-existing unrelated warning), `npm test` (29/29), `npm run build` all clean after the `nativeButton` fix.
+
+**Commands run:**
+```
+npm run build
+python3 -c "... route-bundle-stats.json diff vs Phase 7's recorded numbers ..."
+# → all 4 routes +1.5–2.7KB uncompressed, EmptyState + 6 new icons
+
+grep -rln "aria-hidden" components/dashboard/{recent-orders-list,recent-activity-feed,
+  top-products,order-status-breakdown,charts-section}.tsx   # all 5, confirmed
+
+npm run dev &
+# Playwright MCP, /orders/ord_9999:
+browser_console_messages(level: "error")
+# → 2 Base UI dev warnings: "expected a native <button>"
+
+# fixed: nativeButton={false} on both Button render={<Link/>} calls
+browser_console_messages(level: "error")   # → 0
+document.querySelectorAll('a')             # → real <a href> elements, correct hrefs
+link.focus(); page.keyboard.press('Enter') # → navigated to /orders
+
+# forced-empty build (temporary, reverted after):
+browser_resize(375x700) / (768x1000) / (1440x1000)
+browser_take_screenshot(fullPage: true)   # → clean at all 3 widths
+git diff --stat lib/api/                  # empty — reverted correctly
+
+npx tsc --noEmit && npm run lint && npm test && npm run build   # all clean
+rm -rf .playwright-mcp; pkill -f "next-server"; pkill -f "next dev"
+```
+
+**How this moves the build forward:** the audit paid for itself — a genuine accessibility/correctness bug (`nativeButton`) shipped in code that was less than an hour old, in a component built specifically *because* the accessibility pass had flagged the app's one unstyled screen. The lesson isn't really about Base UI specifically; it's that a component built to fix one gap can introduce a different one, and the only way to know is to check the new surface with the same rigor as the old one, not assume it inherits correctness from the primitives it's made of. A second, smaller find: `learn.md` itself had a structural bug from earlier in this session — the Error-state audit section's closing paragraph had been dropped mid-edit and ended up duplicated at the file's true end, after two later phases. Fixed by moving it back to the right place and removing the orphaned copy, since a mis-ordered decision log is exactly the kind of thing this file exists to prevent.

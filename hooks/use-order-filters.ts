@@ -2,6 +2,7 @@
 
 import { useCallback } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { sanitizeDateParam } from "@/lib/date-params";
 import { ORDER_STATUSES, type OrderStatus } from "@/lib/types/order";
 
 export interface OrderFiltersState {
@@ -23,12 +24,21 @@ export function useOrderFiltersUrl() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
+  // Every value is validated here, not just read — this hook is the one
+  // place the URL becomes app state, so a malformed param should stop
+  // being malformed at this line rather than at whichever consumer
+  // happens to touch it first. `status` was always checked against the
+  // closed enum; `from`/`to` weren't, and a hand-edited `?from=banana`
+  // reached formatDate() in DateRangeFilter's trigger label and threw
+  // RangeError, taking down the whole orders page. An unusable value is
+  // dropped (treated as "no filter"), matching how an unknown status
+  // falls back to "all" rather than filtering everything out.
   const rawStatus = searchParams.get("status");
   const filters: OrderFiltersState = {
     q: searchParams.get("q") ?? "",
     status: rawStatus && ORDER_STATUSES.includes(rawStatus as OrderStatus) ? (rawStatus as OrderStatus) : "all",
-    from: searchParams.get("from") ?? "",
-    to: searchParams.get("to") ?? "",
+    from: sanitizeDateParam(searchParams.get("from")) ?? "",
+    to: sanitizeDateParam(searchParams.get("to")) ?? "",
   };
 
   // replace, not push — a filter tweak or page change shouldn't add a new

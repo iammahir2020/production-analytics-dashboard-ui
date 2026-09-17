@@ -1,5 +1,7 @@
+import { PackageOpen } from "lucide-react";
 import { getTopProducts } from "@/lib/api/analytics";
 import { formatCurrency } from "@/lib/format";
+import { EmptyState } from "@/components/shared/empty-state";
 import { SectionHeading } from "@/components/shared/section-heading";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -14,6 +16,24 @@ const TOP_PRODUCTS_LIMIT = 5;
 // already carries but nothing on the dashboard had read until now.
 export async function TopProducts() {
   const products = await getTopProducts(TOP_PRODUCTS_LIMIT);
+
+  // Reachable without an empty dataset: this aggregates spent-status
+  // orders only, so a period where every order was cancelled or refunded
+  // legitimately produces no top products at all.
+  if (products.length === 0) {
+    return (
+      <section className="flex flex-col gap-3">
+        <SectionHeading>Top products</SectionHeading>
+        <Card>
+          <EmptyState
+            icon={<PackageOpen className="size-6 text-muted-foreground" aria-hidden="true" />}
+            title="No product sales yet"
+            className="py-10"
+          />
+        </Card>
+      </section>
+    );
+  }
 
   return (
     <section className="flex flex-col gap-3">

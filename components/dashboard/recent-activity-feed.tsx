@@ -1,6 +1,7 @@
-import { PackagePlus, RefreshCw, Undo2, UserPlus } from "lucide-react";
+import { History, PackagePlus, RefreshCw, Undo2, UserPlus } from "lucide-react";
 import { getRecentActivity } from "@/lib/api/activity";
 import { formatRelativeTime } from "@/lib/format";
+import { EmptyState } from "@/components/shared/empty-state";
 import { SectionHeading } from "@/components/shared/section-heading";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -21,6 +22,24 @@ const ACTIVITY_ICONS: Record<ActivityType, typeof PackagePlus> = {
 
 export async function RecentActivityFeed() {
   const activity = await getRecentActivity(RECENT_LIMIT);
+
+  // Same reasoning as RecentOrdersList: an empty log is a real answer, not
+  // an error. h-full/flex-1 kept so this still stretches to match its
+  // taller grid-row sibling rather than collapsing to the message height.
+  if (activity.length === 0) {
+    return (
+      <section className="flex h-full flex-col gap-3">
+        <SectionHeading>Recent activity</SectionHeading>
+        <Card className="flex-1">
+          <EmptyState
+            icon={<History className="size-6 text-muted-foreground" aria-hidden="true" />}
+            title="No recent activity"
+            className="py-10"
+          />
+        </Card>
+      </section>
+    );
+  }
 
   return (
     // h-full + Card flex-1: RecentOrdersList (8 rows) is naturally taller
