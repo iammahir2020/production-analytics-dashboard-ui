@@ -1725,3 +1725,66 @@ pkill -9 -f "next-server"
 ```
 
 **How this moves the build forward:** the dashboard and the orders page now share one consistent row-click affordance everywhere an order appears, and the navigation logic behind it lives in exactly one place (`useOrderRowLink`) rather than two copies that could quietly diverge.
+
+## Phase 5 — Basic Testing (steps 35–40, built in one pass)
+
+**What was asked.** The whole phase in one go: install and configure Jest + React Testing Library via `next/jest`, then the six tests `step.md`/`plan.md` name — `lib/format.ts` formatters, `lib/api/client.ts`'s `mockFetch`, `lib/api/orders.ts`'s `getOrders(filters)`, and two component tests (`SummaryCards`, `EmptyState`). `plan.md`'s own testing section is explicit that this is "basic, not exhaustive" — the highest-value, easiest-to-assert logic, not blanket coverage — so scope decisions below follow that stated philosophy rather than second-guessing it.
+
+**Setup: `next/jest`, jsdom, colocated `*.test.ts(x)` files, no `ts-node`.** Followed Next's own bundled docs (`node_modules/next/dist/docs/01-app/02-guides/testing/jest.md`) rather than assuming a config from training data, per `AGENTS.md`'s standing "this Next.js has breaking changes, read the docs" instruction. One deliberate deviation from the doc's exact example: `jest.config.mjs` (real ESM, `import`/`export default`) instead of the docs' `jest.config.ts`, which needs `ts-node` as an extra devDependency just to let Jest load the config file itself before any test transform even runs — `.mjs` needs nothing extra since Node runs ESM natively and `next/jest`'s own transform never touches this file. Tests are colocated next to what they test (`lib/format.test.ts`, not a parallel `__tests__/` tree) — Jest's default `testMatch` already picks up `*.test.ts(x)` anywhere, so this needed no config, and it keeps each test next to the file it exists for.
+
+**Three real, non-obvious problems found getting from "npm test" to green — none of them guessable from the docs alone, all confirmed by actually running the suite and reading what broke:**
+
+1. **`next/jest`'s alias resolution doesn't cover `jest.mock()`.** A plain `import x from "@/lib/api/client"` resolved with zero config — `next/jest`'s SWC transform handles the `@/*` alias for ordinary imports. But `jest.mock("@/lib/data/mock-orders.json", factory)` in the exact same file threw `Cannot find module`. Confirmed the cause directly rather than guessing: `npx jest --showConfig` printed the actual `moduleNameMapper` array, and there was no `@/` entry in it at all — that alias simply isn't a Jest-level concept here, only a compile-time one the transform applies to import statements it can see and rewrite; `jest.mock()`'s first argument is just a runtime string, invisible to that transform. Fixed with one manual `moduleNameMapper: { "^@/(.*)$": "<rootDir>/$1" }` entry (exactly what the docs' own "Optional: Handling Absolute Imports" section shows — the "optional" framing is what led to skipping it initially, but it's only optional for plain imports).
+
+2. **`jest.mock()` calls are hoisted above every other top-level statement, including a `const` sitting physically above them in the source.** First draft of the `getOrders` test and the `SummaryCards` test both declared a fixture object as an outer `const`, then referenced it inside `jest.mock(path, () => fixture)`. Both threw `Cannot access 'fixture' before initialization` — Jest's hoisting (via SWC under `next/jest`, the same mechanism `babel-plugin-jest-hoist` provides under Babel) moves `jest.mock()` calls to the very top of the compiled file, ahead of the `const`'s own initialization, so by the time the factory runs, the `const` is in its temporal dead zone. This is a known Jest gotcha, not a bug in this project's setup — the usual escape hatch (prefixing the variable name with `mock`) is a Babel-specific allowlist check, not a structural fix, and didn't apply here since `next/jest` uses SWC. The actual fix is structural: for `getOrders`'s fixture, the array literal now lives directly inside the `jest.mock()` factory, not in an outer const; for `SummaryCards`'s fixture, the mock factory returns a bare `jest.fn()` with no implementation, and the real fixture value gets wired in via `jest.mocked(getSummaryStats).mockResolvedValue(summaryFixture)` inside `beforeEach` — which runs during the test phase, safely after the module has fully evaluated and the const exists.
+
+3. **`jest-environment-jsdom`'s global scope doesn't include `structuredClone`.** `mockFetch`'s own real implementation (not mocked, in `client.test.ts` specifically, which tests it directly) throws `ReferenceError: structuredClone is not defined` under jsdom — confirmed this is a jsdom-environment gap, not a real bug, by checking Node itself: `node -e 'console.log(typeof structuredClone)'` prints `"function"` in a normal Node process (Node 18+). The one subtlety worth documenting: `jest.setup.ts` itself runs *inside* the same jsdom-provided global scope as the tests (that's the whole point of `setupFilesAfterEnv` — verified this by trying `globalThis.structuredClone = structuredClone` in the setup file first, which threw the identical `ReferenceError` from inside the setup file itself, since a bare `structuredClone` reference there resolves against the same missing jsdom global, not the outer Node process). So there was no way to just "borrow the real one" by reference from that file. Polyfilled instead with a JSON round-trip (`JSON.parse(JSON.stringify(value))`) — not a general `structuredClone` replacement (fails on Dates, Maps, circular references), but a faithful one here specifically because every value `mockFetch` ever clones in this app is already plain JSON, parsed straight out of `lib/data/*.json`.
+
+**A fourth, smaller thing worth naming even though it didn't block anything: `date-fns`'s `format()` renders in the local timezone.** A date-formatter test's expected string would silently depend on whichever timezone happens to run the suite otherwise. Fixed at the `npm test`/`npm run test:watch` script level (`TZ=UTC jest`, in `package.json`) rather than inside a test file — pins every test run to the same timezone regardless of the machine or CI runner, closer to the root of the problem than repeating a `TZ` override per test.
+
+**`SummaryCards`' test needed a real adaptation, not just an implementation — the step's own wording didn't match the actual component.** `step.md`'s step 39 said "renders the correct values from props," but `SummaryCards` (built in Phase 2b) is an `async` Server Component that fetches its own data via `getSummaryStats()` and takes zero props — same self-contained-fetch pattern as every other dashboard section. Two real constraints collided here: Jest doesn't support rendering an `async` Server Component the normal way at all (Next's own docs, quoted in full: "Since `async` Server Components are new to the React ecosystem, Jest currently does not support them... we recommend using E2E tests for `async` components"), and this project has no E2E tooling (deliberately — `plan.md` scopes testing to Jest + RTL only). The resolution: mock `getSummaryStats` to return a known fixture, then call `SummaryCards()` directly as a plain function and `await` the JSX it returns — `render(await SummaryCards())` — instead of writing `<SummaryCards />` and letting RTL try to render it. By the time `render()` receives it, it's already a fully-resolved, ordinary synchronous React element tree, which is all `render()` ever actually needed; the `async`-ness never has to survive into React's render cycle. `step.md` updated to note this adaptation rather than silently diverging from what it said.
+
+**`getOrders` tests use a small hand-built 5-order fixture, not the real 200-order generated dataset.** Deliberate, and directly informed by the discussion two turns ago about *not* expanding the mock activity dataset: `lib/data/mock-orders.json` is meant to be regenerated (`scripts/generate-mock-data.mjs` is seeded for reproducibility, but its output isn't a frozen contract), so a unit test asserting on `getOrders()`'s filtering/sorting/pagination *logic* needs input that won't shift out from under it if the generator or its seed ever changes. `jest.mock("@/lib/data/mock-orders.json", ...)` intercepts the exact specifier `getOrders()` itself imports, so this is still a real test of the actual function, not a parallel reimplementation of its logic. Covers exactly what step 38 names — status filter, search filter (both the order-id and customer-name branches, including a case-insensitivity check), inclusive date-range filter, and pagination slicing (including the newest-first sort order and the default-page-size path) — plus two small `getOrderById` tests (found / not-found), which wasn't named in step 38 but is the same file, same fixture, and a two-line addition for a function two other phases (Phase 4's order-details route) actually depend on.
+
+**Deliberate scope cuts in `lib/format.test.ts`, stated rather than silent.** Tests `formatCurrency`, `formatSignedCurrency`, `formatCurrencyCompact` (currency, all three with real branch logic — rounding, sign, lakh-vs-not) and `formatDate`/`formatShortDate`/`formatDateTime` (date) — exactly `step.md`'s named scope. Left out on purpose: `formatPercent` (a one-line `Intl` passthrough with no branch to get wrong) and `formatRelativeTime` (reads the real wall clock via `formatDistanceToNow` — testable, but only by faking `Date.now()` for an assertion that wouldn't be testing anything specific to this codebase). Both omissions are named in the test file's own top comment, not just left implicit.
+
+**Verification.** `npm test`: 5 suites, 29 tests, all passing. `npm run lint`: clean (same one pre-existing, already-flagged `client.ts` warning — nothing new introduced). `npm run build`: compiles clean, TypeScript clean (test files are included by `tsconfig.json`'s `**/*.ts`/`**/*.tsx` and type-checked as part of the same build), and the route table is unaffected (`/`, `/orders`, `/orders/[id]` — test files don't become routes or otherwise affect the production bundle).
+
+**Commands run:**
+```
+npm install -D jest jest-environment-jsdom @testing-library/react \
+  @testing-library/dom @testing-library/jest-dom @types/jest
+# → added cleanly, 0 vulnerabilities
+
+npm test
+# → first real run: 3 suites failed
+#   - "Cannot find module '@/lib/data/mock-orders.json'" /
+#     "Cannot find module '@/lib/api/analytics'" (jest.mock() with an
+#     aliased path — see problem 1 above)
+# fixed: added moduleNameMapper to jest.config.mjs
+
+npm test
+# → "Cannot access 'fixtureOrders'/'summaryFixture' before initialization"
+#   (jest.mock() hoisting — see problem 2 above)
+# fixed: inlined the getOrders fixture into its factory; switched
+#   SummaryCards' fixture to jest.mocked(...).mockResolvedValue() in beforeEach
+
+npm test
+# → "ReferenceError: structuredClone is not defined" (jsdom env gap —
+#   see problem 3 above), everywhere mockFetch's real implementation ran
+# fixed: JSON-round-trip polyfill in jest.setup.ts
+
+npm test
+# → 1 remaining failure: "throws an ApiError when the fail rate triggers"
+#   — an unhandled-rejection race between advancing the fake timer and
+#   attaching the .rejects handler
+# fixed: create the expect(...).rejects/.resolves chain before advancing
+#   the timer, not after (applied to all four timer-advancing assertions
+#   in client.test.ts for consistency, not just the one that failed)
+
+npm test          # → 5 suites, 29 tests, all passing
+npm run lint       # → clean (1 pre-existing unrelated warning)
+npm run build      # → compiled clean, TypeScript clean, routes unchanged
+```
+
+**How this moves the build forward:** the service layer (`mockFetch`, `getOrders`) and the two highest-value/easiest-to-assert UI pieces now have a real, fast (~1–2s), deterministic regression net — useful the moment any later phase (README, deploy prep, or any further UI pass) touches this code again. The four real Jest/`next/jest`/jsdom gotchas found along the way are written into `step.md`'s standing-lessons list, not just fixed silently, since none of them were guessable in advance and all four would reproduce identically for any later test file in this project.
