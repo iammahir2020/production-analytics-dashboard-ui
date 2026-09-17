@@ -57,6 +57,13 @@ export function StickyLedgerCell({ as = "td", sticky, status, className, childre
 
   return (
     <Tag
+      // scope="col" is invalid on <td> — only ever rendered when as="th",
+      // which is every real header cell this component produces (the
+      // orders table's and recent-orders table's leading column). Without
+      // it, a screen reader reading a data cell has no programmatic way
+      // to know which header it belongs to, only the plain <th> ones
+      // sitting beside it (recent-orders-list.tsx) got the same fix.
+      scope={as === "th" ? "col" : undefined}
       className={cn(STICKY_POSITION[sticky], "bg-card", padding, className)}
       style={{ boxShadow: shadows.join(", ") }}
     >

@@ -2158,4 +2158,74 @@ npm test   # unaffected, all still pass
 
 **How this moves the build forward:** a real, measured ~74KB reduction in first-load JS on both orders routes — not a speculative optimization, found by reading Next's own build diagnostics rather than guessing at what "felt heavy." Equally important, the audit confirmed the rest of the codebase's memoization, data-fetching, and dependency choices were already sound going into this phase — largely because they'd already been built with these questions in mind (`OrderRow`'s memo comment, the parallel `Promise.all` in order details, the shared single fetch in `ChartsSection`) rather than needing a separate cleanup pass now. Phase 8 (Accessibility) is next.
 
+## Phase 8 — Accessibility Pass (step 50)
+
+**What was done:** went through the table, filters, nav, and error UI with real keyboard-only navigation and screen-reader-relevant attributes, verified against the live DOM rather than inferred from the JSX — found and fixed four real gaps, one of them a genuine functional block, not a cosmetic one.
+
+**1. `<th>` cells missing `scope="col"`.** Both ledger tables (`OrdersTable` via `StickyLedgerCell`, and `RecentOrdersList`'s plain `<th>`s) rendered header cells with no `scope` attribute — a screen reader reading a data cell has no programmatic link back to which column it's under, only sighted users get that from position. Fixed at the shared source (`StickyLedgerCell` now sets `scope={as === "th" ? "col" : undefined}`, invalid on `<td>` so gated on `as`) plus the three plain `<th>`s in `recent-orders-list.tsx` that don't go through that component. Confirmed via a fresh production build: `curl`'d both pages and counted `scope="col"` occurrences — 5 on `/orders` (all five columns), 4 on `/` (the recent-orders table's four columns), matching exactly.
+
+**2. Active nav link had no `aria-current`.** `NavLinks` conveyed "you're here" only visually (a colored underline) — a screen reader user tabbing through had no equivalent signal. Added `aria-current={isActive ? "page" : undefined}`. Verified by focusing each link in turn via real Tab presses and reading `getAttribute('aria-current')` off `document.activeElement`: `null` on Dashboard while on `/orders`, `"page"` on Orders — matches the actual route.
+
+**3. `SectionBoundary`'s error card had no live region.** When a section fails after the page has already loaded, the error message and Retry button appear with no announcement — a screen reader user not already focused there would never know. Added `role="alert"` to the fallback `Card`.
+
+**4. The real one — chart SVGs had no accessible name.** `RevenueChart`, `OrdersChart`, and `StatusDonut` are bare Recharts SVGs with no `role`/`aria-label`; a screen reader encounters an unlabeled graphic (or, worse, wades through internal SVG text nodes in a confusing order). Added `role="img"` + a one-line `aria-label` to each `ChartContainer` call, sourced from the same title already visible beside each chart (`ExpandableChart`'s panel header) rather than inventing new copy.
+
+**5. The real bug — arrow-key navigation inside the date-range Calendar did nothing at all, and it wasn't a Recharts-style "nice to have."** `role="grid"` + roving `tabindex` (one day at `tabindex="0"`, every other day at `-1`) is a promise to assistive tech that arrow keys move through the grid — WAI-ARIA's whole point of that pattern. Landing on "Today" via Tab and pressing `ArrowRight` did nothing; since roving tabindex means Tab skips straight past the rest of the grid to Clear/Apply, this meant **a keyboard-only user could not select any date other than today** — a full functional block, not a polish gap.
+
+Traced it properly rather than guessing at a fix:
+- A capture-phase `keydown` listener on `window` confirmed the event reached the correct button and had `defaultPrevented`/`stopPropagation` behavior consistent with react-day-picker's own `handleDayKeyDown` actually running (its source, read directly from `node_modules/react-day-picker/dist/esm/DayPicker.js`, calls `e.preventDefault(); e.stopPropagation(); moveFocus(...)` for arrow keys) — so the library's own handler genuinely fired.
+- Confirmed real browser focus (`.matches(':focus')`, not just `document.activeElement` by inference) was on the correct button, and confirmed via React's fiber props (`__reactProps$...`) that `onFocus`/`onKeyDown`/`onBlur` were all genuinely wired to it — ruled out a prop-forwarding break through Base UI's `Button`/`useButton`.
+- Tried the one lever the library exposes for this (`autoFocus` on `<Calendar>`, which only changes whether `useFocus`'s internal `focusedDay` state starts populated) — no change, ruling out the "state never initialized" theory.
+- Root cause, found by reading `components/ui/calendar.tsx`'s `CalendarDayButton` directly: it creates `const ref = React.useRef<HTMLButtonElement>(null)` and an effect that calls `ref.current?.focus()` whenever `modifiers.focused` becomes true for that day — this is the *only* mechanism that moves real DOM focus to the day react-day-picker's `moveFocus` just targeted internally. But the generated component never attached `ref={ref}` to the `<Button>` it renders. `ref.current` was permanently `null`, so the whole "move focus to the new day" step was a silent no-op — react-day-picker's own state (`focusedDay`, the new roving `tabindex`) updated correctly every time, but nothing ever told the browser to actually move focus there. Tab still worked by coincidence (native browser tab-order following `tabIndex="0"`, unrelated to this ref), which is exactly why this stayed invisible until arrow keys were tested specifically. This is upstream shadcn scaffolding output (`npx shadcn add calendar`), not something introduced by earlier work on this component — the same class of gap as `PopoverContent`'s ring-vs-border fix from the original Calendar install, found the same way: by actually using the thing, not reading the code and assuming it matched the reference implementation.
+- Fix: one line, `ref={ref}` added to the `<Button>` in `CalendarDayButton`, with a comment explaining why it matters (so the next person touching this file doesn't see an apparently-unused `ref` and "clean it up").
+
+**Verification — a full keyboard-only range pick, no mouse at any point:** Tab to the trigger, Enter to open (focus correctly lands on "Go to the Previous Month", matching Base UI's own popover-open focus behavior — confirmed unaffected by the fix), Tab twice into the grid, landed on Today. `ArrowRight` → focus genuinely moved to the 19th (previously stuck on the 18th). Enter to set the range start, `ArrowRight` ×2 → landed on the 21st, Enter to set the end, Tab → Clear, Tab → Apply, Enter → URL became `/orders?from=2026-09-19&to=2026-09-21`. Every step read off the real DOM (`document.activeElement`, `getComputedStyle`), not inferred from a screenshot.
+
+Also re-verified the existing Select (status filter) was already fully keyboard-operable end to end (Enter to open, ArrowDown to highlight, Enter to choose — URL updated to `?status=pending`), and took a real screenshot confirming the order-id link's focus ring is genuinely visible on screen, not just present in computed styles.
+
+**Verification:** `npx tsc --noEmit`, `npm run lint` (one pre-existing, unrelated warning — `lib/api/client.ts`'s now-unused `DEFAULT_DELAY_MS`, left alone, not from this session's edits), `npm test` (29/29), `npm run build` all clean.
+
+**Commands run:**
+```
+grep -rln "use client" app components hooks   # scoped the audit surface
+grep -rn "outline\|:focus" app/globals.css     # confirmed the shadcn base
+  # layer tints the native focus outline (outline-ring/50) rather than
+  # stripping it — links/buttons keep a real, visible default ring
+
+# fixed: scope="col" (StickyLedgerCell + recent-orders-list.tsx),
+#        aria-current (nav-links.tsx), role="alert" (section-boundary.tsx),
+#        role="img" + aria-label (three chart components)
+npx tsc --noEmit   # clean
+
+npm run dev &
+# Playwright MCP, /orders: real Tab presses through the whole page,
+#   reading document.activeElement + getComputedStyle(outlineStyle) at
+#   each stop — confirmed reachable, confirmed visible focus
+#   (screenshot: a real ring around "ord_0166")
+# aria-current: Tab to Dashboard (null) then Orders (page) — matches route
+# Select: Enter → ArrowDown → Enter → URL ?status=pending
+# th scope: document.querySelectorAll('table th') → all 5 report scope=col
+
+# Calendar arrow-key investigation:
+window.addEventListener('keydown', ..., true)   # capture-phase spy
+# → event reaches target, propagation stopped — handleDayKeyDown ran
+el.matches(':focus')                             # confirmed real focus
+el['__reactProps$...']                           # onFocus/onKeyDown present
+# tried autoFocus on <Calendar> — no change, reverted
+# read components/ui/calendar.tsx directly → found the unattached ref
+
+# fixed: ref={ref} added to CalendarDayButton's <Button>
+npx tsc --noEmit   # clean
+# re-tested: ArrowRight from "Today" → focus moved to the 19th (was stuck)
+# full keyboard-only flow: Tab → Enter → Tab×2 → ArrowRight → Enter →
+#   ArrowRight×2 → Enter → Tab → Tab → Enter
+#   → URL: /orders?from=2026-09-19&to=2026-09-21
+
+npm run lint && npm test && rm -rf .next && npm run build   # all clean
+rm -rf .playwright-mcp
+pkill -f "next-server"; pkill -f "next dev"; pkill -f "next start"
+```
+
+**How this moves the build forward:** four real accessibility gaps closed, and one of them — the calendar's arrow-key navigation — was a genuine functional block for keyboard-only users, not a labeling nicety, found only because arrow-key navigation was actually tested rather than assumed to work from the presence of `role="grid"` and roving `tabindex` in the markup. The root-cause trace (capture-phase event spy → real-focus check → fiber-props check → the `autoFocus` red herring → the missing `ref`) is worth remembering as a template for "the markup looks right but the behavior doesn't happen" bugs generally: confirm the event fires, confirm it's not consumed early, then check whether anything downstream actually acts on the resulting state — in this case, nothing did, because the one line that would have was never written. Phase 9 (README) is next.
+
 **How this moves the build forward:** two real bugs fixed — one purely visual (a missing `h-full`/`justify-center` on a shared fallback component, now correctly sized in every context that uses it), one architectural (an error-isolation gap that exactly mirrored a loading-isolation bug already fixed once before, now closed the same way with the same shared component). Both were found by actually forcing and observing failures end to end, not by reading the code and assuming it was fine — consistent with this session's established discipline, and `SectionBoundary` is now confirmed to correctly protect both the loading *and* the error case, on both pages, not just the page it was originally built for.

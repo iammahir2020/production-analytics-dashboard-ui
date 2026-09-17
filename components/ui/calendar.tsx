@@ -189,6 +189,16 @@ function CalendarDayButton({
 }: React.ComponentProps<typeof DayButton> & { locale?: Partial<Locale> }) {
   const defaultClassNames = getDefaultClassNames()
 
+  // react-day-picker's own arrow-key grid navigation (Left/Right/Up/Down
+  // move the roving-tabindex day) depends entirely on this ref: it calls
+  // .focus() on whichever day button next becomes modifiers.focused, since
+  // updating internal state alone doesn't move real browser focus. shadcn's
+  // generated output creates the ref but never attaches it to the button
+  // below — found by testing arrow-key navigation directly (it silently
+  // did nothing, confirmed via a keydown listener showing the event WAS
+  // being handled and stopped, just never actually moving DOM focus) and
+  // tracing it to this missing ref prop, not assumed from reading the
+  // component alone.
   const ref = React.useRef<HTMLButtonElement>(null)
   React.useEffect(() => {
     if (modifiers.focused) ref.current?.focus()
@@ -196,6 +206,7 @@ function CalendarDayButton({
 
   return (
     <Button
+      ref={ref}
       variant="ghost"
       size="icon"
       data-day={day.date.toLocaleDateString(locale?.code)}

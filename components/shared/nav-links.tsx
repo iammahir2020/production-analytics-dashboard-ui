@@ -20,6 +20,7 @@ export function NavLinks() {
           <Link
             key={href}
             href={href}
+            aria-current={isActive ? "page" : undefined}
             className={cn(
               "border-b-2 border-transparent pb-1 text-sm font-medium transition-colors",
               isActive ? "border-primary text-foreground" : "text-muted-foreground hover:text-foreground"

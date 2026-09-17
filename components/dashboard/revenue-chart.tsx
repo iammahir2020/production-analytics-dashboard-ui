@@ -29,7 +29,12 @@ export function RevenueChart({ data, className }: RevenueChartProps) {
   const lastPoint = data[data.length - 1];
 
   return (
-    <ChartContainer config={chartConfig} className={cn("aspect-auto w-full", className ?? "h-40")}>
+    <ChartContainer
+      config={chartConfig}
+      role="img"
+      aria-label="Revenue over time, area chart"
+      className={cn("aspect-auto w-full", className ?? "h-40")}
+    >
       {/* right: 20 (not 8) reserves room so the panel's corner expand
           button never sits on top of the last tick/date label. */}
       <AreaChart data={data} margin={{ left: 0, right: 20, top: 8, bottom: 0 }}>

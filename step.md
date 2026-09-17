@@ -179,7 +179,7 @@ Each step is a single, reviewable unit of work. Check it off after reviewing, th
 
 ## Phase 8 — Accessibility Pass
 
-- [ ] 50. Keyboard navigation + visible focus states on table and filters; proper labels/aria attributes
+- [x] 50. Keyboard navigation + visible focus states on table and filters; proper labels/aria attributes — audited and verified via real keyboard-only testing; fixed missing `<th scope="col">`, `aria-current` on the active nav link, a live region on the error retry card, accessible labels on the three chart SVGs, and a genuine bug (a real functional block, not cosmetic) where the date-range Calendar's arrow-key navigation silently did nothing — see learn.md
 
 🔖 **Suggested commit point** — accessibility pass complete.
 

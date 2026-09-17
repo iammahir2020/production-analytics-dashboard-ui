@@ -28,9 +28,9 @@ export async function RecentOrdersList() {
             <thead>
               <tr className="text-left text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
                 <StickyLedgerCell as="th" sticky="left">Date</StickyLedgerCell>
-                <th className="px-4 pt-4 pb-2 font-semibold">Particulars</th>
-                <th className="px-4 pt-4 pb-2 font-semibold">Status</th>
-                <th className="px-4 pt-4 pb-2 text-right font-semibold">Amount</th>
+                <th scope="col" className="px-4 pt-4 pb-2 font-semibold">Particulars</th>
+                <th scope="col" className="px-4 pt-4 pb-2 font-semibold">Status</th>
+                <th scope="col" className="px-4 pt-4 pb-2 text-right font-semibold">Amount</th>
               </tr>
             </thead>
             <tbody>

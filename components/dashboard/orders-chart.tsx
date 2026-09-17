@@ -24,7 +24,12 @@ interface OrdersChartProps {
 
 export function OrdersChart({ data, className }: OrdersChartProps) {
   return (
-    <ChartContainer config={chartConfig} className={cn("aspect-auto w-full", className ?? "h-40")}>
+    <ChartContainer
+      config={chartConfig}
+      role="img"
+      aria-label="Orders over time, bar chart"
+      className={cn("aspect-auto w-full", className ?? "h-40")}
+    >
       {/* right: 20 (not 8) — same corner-button clearance as RevenueChart. */}
       <BarChart data={data} margin={{ left: 0, right: 20, top: 8, bottom: 0 }}>
         <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-grid-line" />

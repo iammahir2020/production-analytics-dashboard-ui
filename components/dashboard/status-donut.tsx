@@ -26,7 +26,12 @@ const chartConfig: ChartConfig = Object.fromEntries(
 // the always-visible legend beside it.
 export function StatusDonut({ data }: StatusDonutProps) {
   return (
-    <ChartContainer config={chartConfig} className="h-40 w-40 shrink-0">
+    <ChartContainer
+      config={chartConfig}
+      role="img"
+      aria-label="Order status breakdown, donut chart — see the list beside it for exact counts"
+      className="h-40 w-40 shrink-0"
+    >
       <PieChart>
         <ChartTooltip
           content={

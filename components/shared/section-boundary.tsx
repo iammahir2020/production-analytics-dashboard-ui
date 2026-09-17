@@ -55,7 +55,10 @@ export function SectionBoundary({ children, label }: SectionBoundaryProps) {
         // space. On a standalone section with no sibling to stretch
         // against (Overview, Charts), h-full is a no-op against the
         // auto-height parent — harmless, not conditionally needed.
-        <Card className="flex h-full flex-col items-center justify-center gap-3 border-destructive/30 py-8 text-center">
+        <Card
+          role="alert"
+          className="flex h-full flex-col items-center justify-center gap-3 border-destructive/30 py-8 text-center"
+        >
           <AlertCircle className="size-5 text-destructive" aria-hidden="true" />
           <p className="text-sm text-muted-foreground">Couldn&apos;t load {label.toLowerCase()}.</p>
           <Button type="button" variant="outline" size="sm" disabled={isPending} onClick={handleRetry}>
