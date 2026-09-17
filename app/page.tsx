@@ -1,69 +1,90 @@
-import Image from "next/image";
+import { Suspense } from "react";
+import { ChartsSection, ChartsSectionSkeleton } from "@/components/dashboard/charts-section";
+import { OrderStatusBreakdown, OrderStatusBreakdownSkeleton } from "@/components/dashboard/order-status-breakdown";
+import { RecentActivityFeed, RecentActivityFeedSkeleton } from "@/components/dashboard/recent-activity-feed";
+import { RecentOrdersList, RecentOrdersListSkeleton } from "@/components/dashboard/recent-orders-list";
+import { SummaryCards, SummaryCardsSkeleton } from "@/components/dashboard/summary-cards";
+import { TopProducts, TopProductsSkeleton } from "@/components/dashboard/top-products";
+import { SectionBoundary } from "@/components/shared/section-boundary";
 
-export default function Home() {
+// The service layer simulates network latency and this reads as live
+// analytics, so render per request rather than baking the data in at build
+// time — otherwise the loading and error states would only ever appear in
+// dev, never in the deployed app.
+export const dynamic = "force-dynamic";
+
+// The page itself fetches nothing. Each section is an async Server
+// Component behind its own Suspense boundary (skeleton matching its real
+// layout) and its own SectionBoundary (error UI + retry) — one slow or
+// failing data source degrades that section alone instead of the whole
+// page, and sections stream in as they resolve rather than waiting on the
+// slowest one.
+export default function DashboardPage() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    // sr-only, not removed: the nav bar already states "you're on
+    // Dashboard" visually, so a second same-size heading right above the
+    // KPI strip only competed with it. A heading still exists for screen
+    // readers — there's no other landmark on this page announcing where
+    // they are (Phase 2b, step 21.3).
+    <div className="flex flex-col gap-3">
+      <h1 className="sr-only">Dashboard</h1>
+
+      <Suspense fallback={<SummaryCardsSkeleton />}>
+        <SectionBoundary label="Overview">
+          <SummaryCards />
+        </SectionBoundary>
+      </Suspense>
+
+      <Suspense fallback={<ChartsSectionSkeleton />}>
+        <SectionBoundary label="Charts">
+          <ChartsSection />
+        </SectionBoundary>
+      </Suspense>
+
+      {/* Order status (4/12) + top products (8/12) — a new data
+          dependency (order aggregation, not the revenue timeseries
+          ChartsSection already owns), so it's its own section rather than
+          folded into ChartsSection, per the established "sections follow
+          data dependencies" rule (Phase 2c). Narrower than the original
+          5/7 split so the donut could grow without crowding the legend —
+          top products, the higher-value content, gets the extra width. */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
+        <div className="lg:col-span-4">
+          <Suspense fallback={<OrderStatusBreakdownSkeleton />}>
+            <SectionBoundary label="Order status">
+              <OrderStatusBreakdown />
+            </SectionBoundary>
+          </Suspense>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+        <div className="lg:col-span-8">
+          <Suspense fallback={<TopProductsSkeleton />}>
+            <SectionBoundary label="Top products">
+              <TopProducts />
+            </SectionBoundary>
+          </Suspense>
         </div>
-      </main>
+      </div>
+
+      {/* Recent orders (7/12) + recent activity (5/12) side by side —
+          two independent Suspense/SectionBoundary pairs, just laid out as
+          grid siblings rather than stacked; each still streams and fails
+          independently. */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
+        <div className="lg:col-span-7">
+          <Suspense fallback={<RecentOrdersListSkeleton />}>
+            <SectionBoundary label="Recent orders">
+              <RecentOrdersList />
+            </SectionBoundary>
+          </Suspense>
+        </div>
+        <div className="lg:col-span-5">
+          <Suspense fallback={<RecentActivityFeedSkeleton />}>
+            <SectionBoundary label="Recent activity">
+              <RecentActivityFeed />
+            </SectionBoundary>
+          </Suspense>
+        </div>
+      </div>
     </div>
   );
 }

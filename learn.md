@@ -709,3 +709,622 @@ rm -rf .next
 ```
 
 **How this moves the build forward:** Phase 2's app-shell prerequisite work is done. Every page built from here — the dashboard (step 14 onward), and later the orders page — renders inside this shell automatically, with working navigation and a working theme toggle already in place, rather than needing shell/chrome bolted on after the fact.
+
+## Step 14 — Build the dashboard page (Server Component)
+
+**What was done:** Replaced `create-next-app`'s boilerplate `app/page.tsx` with the real dashboard: an async Server Component that fetches all four datasets in parallel (`getSummaryStats`, `getRevenueTimeseries`, `getOrders({ pageSize: 5 })`, `getRecentActivity(5)`) and renders them. Since `SummaryCards`, the charts, and the list components are steps 15–19, this step renders the data plainly — real values in semantic markup (`dl`/`dt`/`dd` for stats, `ul`/`li` for lists), with no card or chart styling yet, and deliberately no "coming soon" placeholder UI. Each following step swaps one section for its real component.
+
+**The decision that actually matters here — `Promise.all`, not sequential awaits.** Every service call carries its own simulated ~500ms delay (and `getSummaryStats` internally awaits `getActiveCustomerCount`, which has one too). Awaiting them one after another would stack to roughly 2 seconds; overlapping them means the page waits for the slowest single call instead of the sum. This isn't theoretical — measured it: a warm request completes in **548ms**, right where parallel execution predicts, rather than the ~2s serial execution would produce. This is the concrete "avoid request waterfalls" decision the README's performance section will cite.
+
+**`export const dynamic = "force-dynamic"`, and why it's not just a toggle.** Without it, Next.js statically prerenders this route at build time — the build output literally showed `○ (Static)` before this change. That would mean the simulated latency happens once at build time and the deployed app serves a pre-baked HTML snapshot, so the loading skeleton (step 20) and error boundary (step 21) would *never* appear in production — they'd only ever be visible in dev. Since the task PDF explicitly requires loading and error handling, states that only work in development would be a hollow implementation. Forcing dynamic rendering makes them real. Confirmed in the build output afterward: the route flipped to `ƒ (Dynamic) server-rendered on demand`. Worth revisiting at step 54 (Lighthouse) — a ~500ms server delay does cost TTFB, so if it materially hurts the performance score, the tradeoff to examine is the simulated delay's duration, not the rendering mode.
+
+**A small thing that avoids decay:** the period label under the heading (`Jun 18, 2026 – Sep 15, 2026`) is derived from the first and last points of the actual revenue timeseries, not a hardcoded string or a "last 90 days" label computed against the wall clock. The mock data's dates are fixed; a clock-relative label would quietly become wrong the longer the deployed app sits, while a data-derived one stays accurate forever.
+
+**One honest note on scope:** the revenue timeseries is fetched here because this step's definition calls for it, but right now it only drives that date-range label — the charts that actually consume it arrive in steps 16–17. Fetching it now is correct (it's part of the page's data requirements and belongs in the same parallel batch), it's just not fully used yet.
+
+**Verification:** `npm run build` (confirmed the route is now `ƒ` Dynamic), `npx tsc --noEmit`, and `npm run lint` all clean. Ran the dev server and checked the real rendered output rather than assuming: timing measured at 548ms on a warm request (the parallelism claim, actually tested); heading and data-derived period range present; `৳45,59,700.00` rendering with correct lakh grouping; 200 orders / 34 active customers / 3.5% conversion all matching the service layer's verified numbers; five real recent orders (Bangladeshi names, real statuses, lakh-grouped amounts) and five real activity entries with relative timestamps.
+
+**Commands run:**
+```
+npm run build
+# → Route (app): ƒ /    (was ○ / before force-dynamic)
+npx tsc --noEmit   # clean
+npm run lint       # clean
+
+nohup npm run dev > /tmp/nextdev8.log 2>&1 & disown
+curl -s -o /tmp/page8.html -w "total: %{time_total}s\n" http://localhost:3000
+# → total: 0.824026s  (first request, includes dev compile)
+curl -s -o /dev/null -w "total: %{time_total}s\n" http://localhost:3000
+# → total: 0.547985s  (warm — confirms parallel, not ~2s serial)
+
+grep -o '৳[0-9,]*\.[0-9][0-9]' /tmp/page8.html    # → ৳45,59,700.00, order totals
+grep -oE '>(Rahim|Nusrat|Tanvir|Jannatul|Imran|...) [A-Z][a-z]+<' /tmp/page8.html
+# → Imran Kabir, Arif Islam, Tasnim Ahmed, Nusrat Talukder
+
+pkill -f "next-server"; pkill -f "next dev"
+rm -f /tmp/page8.html /tmp/nextdev8.log
+rm -rf .next
+```
+
+**How this moves the build forward:** the dashboard's data layer is wired end to end — every number the page needs is already fetched, typed, and rendering correctly. Steps 15–19 are now purely presentational work: replace each plain section with its designed component, with no data plumbing left to figure out.
+
+### Step 14, revised — per-section Suspense instead of one page-level `Promise.all`
+
+**What prompted it:** the user asked a sharp question about the implementation above — with `Promise.all`, if one of the four fetches fails, the whole page fails and shows nothing. Would `Promise.allSettled` be better?
+
+**Why `allSettled` wasn't the answer.** It gets you the partial data, but it doesn't answer *what to render where a section failed*. A silently missing revenue figure reads as zero revenue, not as a failure — arguably worse than a clear error, because it's misleading rather than just unhelpful. Doing `allSettled` properly means building per-section error UI anyway, at which point you've done most of the work for a better option and gotten less from it: no streaming, and every section still waits on the slowest one.
+
+**What replaced it:** each section is now an async Server Component fetching its own data, behind its own `Suspense` boundary. The page itself (`app/page.tsx`) fetches nothing and isn't even `async` anymore — it's a shell. This gives failure isolation *and* independent loading states *and* streaming, for about the same amount of code.
+
+**A design principle that fell out of the change:** sections are drawn around **data dependencies**, not visual boxes. `RevenueChart` and `OrdersChart` both read a single `getRevenueTimeseries()` result — splitting them into separate sections would either duplicate that fetch or need `cache()` deduplication to avoid it. They share one section and one boundary instead, which is also semantically right: if that fetch fails, neither chart has anything to draw.
+
+**The measured payoff — TTFB dropped from ~500ms to 38ms.** Under the old page-level `Promise.all`, nothing could be sent to the browser until all four fetches resolved, so time-to-first-byte was the full ~500ms. With per-section Suspense, the shell flushes immediately and sections stream in as they resolve: measured **TTFB 38ms, total 538ms** on a warm request. Same total time, but roughly a 13× improvement in how fast the browser gets *something* — which feeds directly into FCP/LCP, so it should show up again at the Lighthouse step.
+
+**An honest finding from actually testing a failure, rather than assuming.** Temporarily made `SummaryCards` throw, then requested the page to see what really happens:
+- The response was still **HTTP 200**, and Recent orders / Recent activity both rendered with their real data — so failure isolation genuinely works at the streaming level, even before any error boundary exists.
+- But the failed section was left **stuck showing its "Loading…" fallback indefinitely** — it never resolves and never explains itself.
+
+That last part matters: it's exactly the "confusing silent gap" failure mode used to argue against `allSettled`. So per-section error boundaries (step 21) aren't optional polish on top of this — they're what turns a perpetual skeleton into a clear, retryable error state. Reverted the test change immediately afterward and confirmed normal rendering was restored (`Overview` section and `৳45,59,700.00` both back).
+
+**Docs updated alongside the code**, since this supersedes an architectural claim the README will cite: `plan.md`'s Server-vs-Client section now describes the shell + per-section boundaries pattern and records why the page-level `Promise.all` was revised (including why `allSettled` was rejected); `step.md` steps 14–21 were rewritten around the new structure, with an architecture note explaining the data-dependency grouping.
+
+**Verification:** `npm run build` (route still `ƒ` Dynamic), `npx tsc --noEmit`, `npm run lint` all clean. All three sections render with correct data; the Suspense fallback appears in the streamed output, confirming the streaming path is actually live rather than inferred.
+
+**Commands run:**
+```
+npm run build      # → ƒ /  (still dynamic)
+npx tsc --noEmit   # clean
+npm run lint       # clean
+
+# Streaming check — TTFB vs total:
+curl -s -o /tmp/page9.html -w "TTFB: %{time_starttransfer}s   total: %{time_total}s\n" http://localhost:3000
+# → TTFB: 0.038432s   total: 0.537830s
+
+grep -o 'Overview\|Recent orders\|Recent activity' /tmp/page9.html | sort -u   # all three
+grep -c 'Loading…' /tmp/page9.html                                            # fallback streamed
+
+# Failure-isolation test (temporary throw in SummaryCards):
+curl -s http://localhost:3000 -o /tmp/fail.html -w "HTTP %{http_code}\n"
+# → HTTP 200; Recent orders + Recent activity still rendered;
+#   Overview absent, its "Loading…" fallback stuck permanently
+
+cp /tmp/summary-backup.tsx components/dashboard/summary-cards.tsx   # reverted
+# → confirmed Overview and ৳45,59,700.00 rendering normally again
+```
+
+**How this moves the build forward:** steps 15–19 now each own one section component that already fetches its own data — purely presentational work from here. Step 20's skeletons and step 21's error boundaries now have obvious, well-defined homes (one per section) instead of being page-level catch-alls.
+
+## Step 15 — Design SummaryCards properly
+
+**What was done:** Replaced the plain `dl`/`dt`/`dd` markup with the confirmed hero-figure treatment from `.interface-design/system.md`: an 11px/600/uppercase/tracked/muted label over a 26px/800/tabular-nums value, with the revenue figure specifically colored `text-primary` (the Khata brand rose) and the other three staying plain foreground — "one accent used with intention," not applied to all four cards uniformly. Added shadcn's `Card` primitive (`npx shadcn add card`) rather than hand-rolling the container div, since a bordered surface tile is a pattern that'll repeat (order details, empty states) — this is the "second real reuse" threshold the project's own conventions call for extracting a shared component at.
+
+**A real mismatch caught between the confirmed spec and shadcn's default, fixed at the source rather than per-usage.** The freshly-added `Card` component defaulted to `ring-1 ring-foreground/10` and `rounded-xl` (11.2px, via the `--radius-xl` scale step) — but the specimen the user actually confirmed used a literal `border` on the dedicated `--border` token and an 8px radius (`--radius` directly, i.e. `rounded-lg` in our scale). Rather than overriding this with a `className` prop every time `Card` gets used, edited `components/ui/card.tsx` itself (`Card`, `CardHeader`, `CardFooter` — three spots using the `xl` radius scale) so every future card — not just this one — inherits the confirmed treatment automatically. Fixing the primitive once here is what makes "use what exists" actually pay off later instead of accumulating a `className` override at every call site.
+
+**A small extraction, not a new file.** `StatCard` (label + value, repeated four times) is a local, unexported function inside `summary-cards.tsx` rather than its own file in `components/ui/` or `components/shared/` — it's specific to this one section's exact typographic treatment, not yet a generalized pattern anything else needs. If a second section ever wants the same stat-tile shape, that's the point to actually extract it somewhere shared, not before.
+
+**Verification:** `npm run build` + `npx tsc --noEmit` + `npm run lint` all clean. Rendered the real page and checked the compiled output directly rather than trusting the source: `data-slot="card"` markup shows `rounded-lg border border-border` (confirms the primitive fix took effect, not just compiled without error), the revenue value carries the `text-primary` class, and all four real values render correctly (`৳45,59,700.00`, `200`, `34`, `3.5%`). Fetched the compiled CSS bundle directly and confirmed `--border` resolves correctly in both themes (`#e6decf` light, `#f3ecdf1a` dark — the hex8 encoding of the `rgba(243,236,223,0.1)` from `system.md`) and that `.border-border { border-color: var(--border) }` and `font-variant-numeric` (tabular-nums) rules are both actually present in the shipped CSS, not just written in the component source.
+
+**Commands run:**
+```
+npx --yes shadcn@latest add card -y
+# → Created components/ui/card.tsx
+
+# (edited card.tsx: ring-1 ring-foreground/10 → border border-border,
+#  rounded-xl → rounded-lg, in Card/CardHeader/CardFooter)
+
+npm run build      # succeeded
+npx tsc --noEmit   # clean
+npm run lint       # clean
+
+nohup npm run dev > /tmp/nextdev10.log 2>&1 & disown
+curl -s http://localhost:3000 -o /tmp/page10.html -w "HTTP %{http_code}\n"   # → 200
+
+grep -o 'data-slot="card"[^>]*' /tmp/page10.html
+# → rounded-lg border border-border ... (confirms the fix compiled through)
+grep -o 'text-primary[^"]*' /tmp/page10.html          # → present on revenue value
+grep -o '৳45,59,700\.00\|>200<\|>34<\|>3\.5%<' /tmp/page10.html
+# → all four real values present
+
+curl -s "http://localhost:3000/_next/static/chunks/<bundle>.css" -o /tmp/bundle10.css
+grep -o -- '--border:[^;}]*' /tmp/bundle10.css
+# → --border: #e6decf   (light)
+# → --border: #f3ecdf1a (dark — hex8 form of rgba(243,236,223,.1))
+python3 -c "... find 'border-border' in the CSS ..."
+# → .border-border { border-color: var(--border); }  — present
+
+pkill -f "next-server"; pkill -f "next dev"
+rm -f /tmp/page10.html /tmp/bundle10.css /tmp/nextdev10.log
+rm -rf .next
+```
+
+**How this moves the build forward:** the `Card` primitive is now correctly aligned to the confirmed direction at the source, so `RevenueChart`/`OrdersChart` (step 16–17), `RecentOrdersList` (step 18), and any future card-shaped UI (order details, step 33) get the right border/radius treatment automatically, with zero repeated overrides.
+
+## Step 16 — ChartsSection + RevenueChart
+
+**What was done:** Added shadcn's `chart.tsx` (`ChartContainer`/`ChartTooltip`/`ChartTooltipContent`) — the standard Recharts+Tailwind+dark-mode integration wrapper — rather than hand-building CSS-variable theming for SVG elements myself. Built `ChartsSection` (async Server Component, fetches `getRevenueTimeseries()` once — both `RevenueChart` and step 17's `OrdersChart` will read this same result, one fetch and one Suspense boundary for both) and `RevenueChart` (Client Component): an area chart with a faint horizontal grid, a gradient fill fading to transparent, thinned x-axis date labels, a currency-formatted tooltip, and an emphasized dot on the most recent day — each a direct translation of a specific line in `.interface-design/system.md` ("an area fill, a faint grid, an emphasized endpoint"), not a generic Recharts default.
+
+**A near-miss avoided: `npx shadcn add chart` almost silently reverted the Step 15 fix.** Adding the chart component triggered a prompt to overwrite `card.tsx` (it's a dependency of `chart`) — which would have reset the border/radius fix from step 15 back to shadcn's defaults (`ring-foreground/10`, `rounded-xl`) without any error or warning, since a "file already exists, overwrite?" prompt reads as routine, not as "this will undo a deliberate customization." Declined it (`echo "n" | npx shadcn add chart -y`) and confirmed afterward that `card.tsx` still had the fix intact. Worth remembering for every future `shadcn add`: check what it's about to touch, not just what it's adding.
+
+**How the chart is actually themed, and why it needed checking rather than assuming.** Recharts renders raw SVG, and `fill`/`stroke` as literal attributes don't reliably resolve `var(--primary)` the same way an HTML element's CSS `background-color` would — this is a real, non-obvious cross-browser-compatibility question, not something to guess at. Read `components/ui/chart.tsx` before writing the chart to see how it actually solves this: `ChartConfig` colors get injected into a scoped `<style>` tag as `--color-{key}` custom properties, switched by a `.dark [data-chart=id] { ... }` selector — real CSS custom-property declarations inside a real `<style>` element, which sidesteps the SVG-attribute question entirely. Since `--primary` is already theme-aware (both `:root` and `.dark` define it), the chart config just points at `var(--primary)` directly rather than needing its own separate light/dark pair.
+
+**A subtlety in `ChartTooltipContent`'s API caught by reading the source, not by trial and error:** its `formatter` prop doesn't format just the value — it replaces the *entire* row (indicator dot, label, and value together). A naive one-line `formatter={(v) => formatCurrency(v)}` would have silently dropped the "Revenue" label and the colored indicator dot from every tooltip. Wrote a formatter that reproduces the full row (dot + label + `formatCurrency`-formatted value) instead of just the number.
+
+**The tooltip's default styling also violated the confirmed depth rule.** `ChartTooltipContent` ships `shadow-xl` by default — but `system.md` explicitly names "dramatic drop shadows" as something to avoid, only allowing "a single restrained ring" for floating elements like tooltips. Fixed this the same way as step 15's `Card` fix: edited `chart.tsx` itself (swapped `shadow-xl` + `border-border/50` for a plain `border-border`, no shadow) rather than passing a `className="shadow-none"` override at the one call site that exists today — so `OrdersChart` (step 17) and any future chart inherit the correct tooltip treatment for free.
+
+**One invalid prop caught by the type checker, not assumed correct:** initially added `isFront` to `ReferenceDot` (recalled from an older Recharts API) to make sure the emphasized endpoint dot painted above the area fill. `tsc` rejected it — not a valid prop on this version's `ReferenceDot`. Removed it: SVG paints in document order, and `ReferenceDot` is already the last child in the JSX, so it renders on top without needing an explicit prop for it.
+
+**A motion decision reconsidered mid-build:** first wrote `isAnimationActive={false}` on the `Area`, on the general principle from `system.md` about not animating high-frequency actions. Caught this was the wrong rule to apply — a chart's one-time entrance animation on page load isn't a repeated user action (like a keyboard shortcut or command palette), it's exactly the "rare/first-run moment" the same guidance says delight is fine for. Removed the override, keeping Recharts' default entrance animation.
+
+**A real limitation, stated plainly rather than glossed over:** Recharts' `ResponsiveContainer` needs the browser to measure its actual rendered width (via `ResizeObserver`) before it draws real chart content — so the server-rendered HTML fetched via `curl` doesn't contain the actual SVG path/dots/axis-ticks, only the container shell. This is the same class of limitation as the theme toggle in step 13.3/13.4: no browser automation is available in this environment (confirmed again here — searched for one, found none), so the actual rendered chart pixels, hover tooltip, and dark-mode color swap aren't something this session can directly observe. What *is* verified: clean build/lint/types, no runtime errors in the dev server log, and the theme-color injection actually compiling through correctly (`--color-revenue: var(--primary)` present in both the light and dark style blocks in the real server-rendered output).
+
+**Verification:** `npm run build` + `npx tsc --noEmit` + `npm run lint` all clean (after fixing the `isFront` type error). Confirmed via the rendered HTML that `ChartStyle`'s theme-injection mechanism is actually working — `--color-revenue: var(--primary)` present for both theme blocks, not just present in the component source. Confirmed `card.tsx`'s step-15 fix survived the `chart` component's dependency-overwrite prompt.
+
+**Commands run:**
+```
+npx --yes shadcn@latest add chart -y
+# → prompted to overwrite card.tsx (a dependency) — would have reverted
+#   step 15's fix
+
+echo "n" | npx --yes shadcn@latest add chart -y
+# → Created components/ui/chart.tsx; Skipped card.tsx (declined overwrite)
+grep -c "rounded-lg border border-border" components/ui/card.tsx   # → 1, fix intact
+
+# (built revenue-chart.tsx, charts-section.tsx; wired ChartsSection into
+#  app/page.tsx behind its own Suspense boundary)
+# (edited chart.tsx: shadow-xl + border-border/50 → border-border, no shadow)
+
+npm run build
+# → error TS2322: Property 'isFront' does not exist on ReferenceDot props
+# (removed isFront — SVG paints in document order, unnecessary)
+
+npm run build      # succeeded
+npx tsc --noEmit   # clean
+npm run lint       # clean
+
+nohup npm run dev > /tmp/nextdev11.log 2>&1 & disown
+curl -s http://localhost:3000 -o /tmp/page11.html -w "HTTP %{http_code}\n"   # → 200
+grep -o '\-\-color-revenue: [^;]*' /tmp/page11.html
+# → --color-revenue: var(--primary)  (both theme blocks)
+grep -i "error\|warn" /tmp/nextdev11.log   # → none
+
+# Confirmed no browser automation tool is available in this environment
+# (searched via ToolSearch — WebFetch explicitly excludes localhost and
+# only extracts text, not screenshots)
+
+pkill -f "next-server"; pkill -f "next dev"
+rm -f /tmp/page11.html /tmp/nextdev11.log
+rm -rf .next
+```
+
+**How this moves the build forward:** the Recharts+Tailwind+dark-mode theming pattern is now established and verified once — step 17's `OrdersChart` reuses the exact same `ChartContainer`/`ChartConfig` approach with a different color, no new integration work needed. The tooltip and card primitives are both correctly aligned to the confirmed direction at the source, not per-usage.
+
+## Step 17 — OrdersChart, same section, same fetch
+
+**What was done:** Added `OrdersChart` — a bar chart of daily order counts — reading the same `getRevenueTimeseries()` result `ChartsSection` already fetched for `RevenueChart`. Restructured `ChartsSection` into two labeled sub-blocks ("Revenue", "Orders") stacked vertically, sharing one fetch and one `Suspense` boundary.
+
+**Why a bar chart, not another area chart.** Revenue is a continuous quantity that flows naturally as a smooth trend; order count is a discrete daily tally — a bar chart is the more honest visual fit for "how many things happened this day," and it also means the two charts don't just look like the same shape recolored. This is the "infinite expression" principle in practice: differentiating what's actually different about the two metrics, not applying one template twice.
+
+**Why `--chart-2`, not a new color or revenue's own `--primary`.** Reusing `--primary` for both charts would make them visually blur together at a glance. Inventing a new, unrelated hue for "orders" would work but adds a color to the palette with no other role in the app. `--chart-2` already exists and already means something — it's the same green the order-status legend uses for "completed" — so orders volume borrows a color that's already semantically tied to "orders going well," rather than a decorative pick.
+
+**Why vertical stacking, not side-by-side.** Both charts share the same x-axis (calendar dates). Stacking them vertically means a given date sits at the same horizontal position in both charts, so the eye can trace straight down to compare "was this a big revenue day because of one large order, or many small ones?" — a side-by-side layout would force that comparison to jump across a gap instead.
+
+**A simpler tooltip than `RevenueChart` needed, and knowing why.** `RevenueChart` required a custom `formatter` to inject `৳`-formatted currency into the tooltip row. `OrdersChart`'s values are just small integers — `ChartTooltipContent`'s *default* row rendering already calls `item.value.toLocaleString()`, which is exactly right for a plain count. No custom formatter needed here; recognizing that the default was already correct, rather than reflexively copying the pattern from the previous component, kept this one simpler.
+
+**Verification:** `npm run build` + `npx tsc --noEmit` + `npm run lint` all clean. Rendered the real page and confirmed both charts' scoped color injection is present and non-colliding — `--color-revenue: var(--primary)` and `--color-orders: var(--chart-2)` both compiled through, each chart carrying its own distinct `data-chart` id (so the two `ChartConfig`s can't leak into each other's scope even though they're rendered on the same page). Both section headings ("Revenue", "Orders") present. No errors in the dev server log.
+
+**Commands run:**
+```
+npm run build      # succeeded
+npx tsc --noEmit   # clean
+npm run lint       # clean
+
+nohup npm run dev > /tmp/nextdev12.log 2>&1 & disown
+curl -s http://localhost:3000 -o /tmp/page12.html -w "HTTP %{http_code}\n"   # → 200
+
+grep -o 'data-slot="chart"[^>]*data-chart="[^"]*"' /tmp/page12.html
+# → two distinct chart ids, confirming no color-scope collision
+grep -o '\-\-color-revenue: [^;]*\|--color-orders: [^;]*' /tmp/page12.html | sort -u
+# → --color-orders: var(--chart-2)
+# → --color-revenue: var(--primary)
+grep -o '>Revenue<\|>Orders<' /tmp/page12.html   # both present
+grep -i "error\|warn" /tmp/nextdev12.log         # → none
+
+pkill -f "next-server"; pkill -f "next dev"
+rm -f /tmp/page12.html /tmp/nextdev12.log
+rm -rf .next
+```
+
+**How this moves the build forward:** the dashboard's full data-and-charts layer (Overview, Revenue, Orders) is now complete and visually differentiated. Steps 18–19 (`RecentOrdersList`, `RecentActivityFeed`) are the last two dashboard sections left to design before the shell moves to loading/error states.
+
+## Step 18 — Design RecentOrdersList (ledger-stamp status)
+
+**What was done:** Extracted the order-status treatment from `system.md` into a shared `components/orders/order-status.tsx` — `ORDER_STATUS_STYLES` (a full status→style lookup) and `OrderStatusIndicator` (the dot + colored text). Extracted now, not left for Phase 3, because this exact 5-way status mapping is already known to be needed again very soon (`OrdersTable`/`OrderRow`) — a known second use, not speculative abstraction. Redesigned `RecentOrdersList` on top of it: each row gets a 3px colored left border (no pill/badge), wrapped in the `Card` primitive with its default padding zeroed out (`py-0`) so the rows own their own spacing instead of Card's padding doubling up with the rows' own.
+
+**A real, non-obvious constraint that shaped the implementation:** Tailwind's build-time scanner only detects *literal* class-name strings in source — a dynamically assembled `` `border-l-${colorName}` `` would produce a string Tailwind never sees while scanning, so no CSS rule would ever be generated for it, and the class would silently do nothing at runtime. `ORDER_STATUS_STYLES` therefore writes out each status's full class strings (`"border-l-chart-3"`, not a color name to be interpolated later) — confirmed this actually worked by fetching the compiled CSS bundle afterward and checking `.border-l-chart-3`, `.border-l-primary`, `.border-l-chart-2`, `.border-l-chart-4`, and `.border-l-destructive` were all genuinely present as real rules, not just written in the component source.
+
+**A real bug caught only by inspecting the actual rendered className, not by trusting a clean build.** After confirming the CSS rules existed, checked the *rendered HTML* — and found 4 of 5 order rows were missing their status border-color class entirely; only the last row (which has no bottom divider) kept it. Root cause: the divider was written as `"border-b border-border"` — but `border-border` (no directional prefix) sets `border-color` on *all four sides*, not just the bottom. `tailwind-merge` (inside the project's `cn()` helper) correctly recognized this as a genuine conflict with the row's own `border-l-chart-*` color and dropped the earlier class — which is the *right* behavior, because leaving both in would have produced exactly this bug in real, uncomposed CSS too (a later all-sides rule silently overriding an earlier left-only one). The actual fix was in the component, not the merge tool: `border-b-border` (the bottom-specific color utility) instead of the all-sides `border-border`. Re-verified afterward that all 5 rows carry the correct class, and that `.border-b-border { border-bottom-color: var(--border) }` compiled correctly.
+
+**Why this matters beyond this one component:** it's a real, generalizable trap — any time a *directional* border/outline utility (`border-l-*`, `border-t-*`, etc.) needs to coexist with an *undirected* one (`border-border`, `border`) on the same element, reach for the directional variant on both sides of the split, not just one. Worth remembering for `OrderRow` in Phase 3, which will need the identical pattern.
+
+**Verification:** `npm run build` + `npx tsc --noEmit` + `npm run lint` all clean, both before and after the fix. Confirmed via the real compiled CSS bundle that all five `border-l-*` status-color utilities and `border-b-border` are genuinely generated (not just assumed from source). Confirmed via the real rendered HTML — not just the component code — that all 5 order rows carry the correct status border color after the fix, and that `OrderStatusIndicator`'s dot and text pick up the matching color classes (`bg-chart-2`/`text-chart-2` for completed, `bg-chart-4`/`text-chart-4` for cancelled, seen on the real 5 most-recent orders).
+
+**Commands run:**
+```
+npm run build      # succeeded
+npx tsc --noEmit   # clean
+npm run lint       # clean
+
+nohup npm run dev > /tmp/nextdev13.log 2>&1 & disown
+curl -s http://localhost:3000 -o /tmp/page13.html -w "HTTP %{http_code}\n"   # → 200
+
+curl -s "http://localhost:3000/_next/static/chunks/<bundle>.css" -o /tmp/bundle13.css
+# checked .border-l-chart-3/.border-l-primary/.border-l-chart-2/
+# .border-l-chart-4/.border-l-destructive — all present
+
+python3 -c "... extract each <li class=\"...\"> from page13.html ..."
+# → BUG: 4 of 5 rows missing their border-l-chart-* class entirely;
+#   only the last row (no border-b) kept it
+
+# (fixed recent-orders-list.tsx: border-border → border-b-border)
+
+curl -s http://localhost:3000 -o /tmp/page13b.html -w "HTTP %{http_code}\n"
+python3 -c "... re-extract <li class> ..."
+# → all 5 rows now carry the correct border-l-chart-* class
+
+curl -s "http://localhost:3000/_next/static/chunks/<bundle>.css" -o /tmp/bundle13b.css
+# → .border-b-border { border-bottom-color: var(--border); }  — confirmed
+
+grep -o '<span class="size-1.5[^>]*>' /tmp/page13b.html   # dot present
+grep -oE 'text-chart-[0-9]|text-primary|text-destructive' /tmp/page13b.html | sort -u
+# → text-chart-2, text-chart-4, text-primary all present
+
+pkill -f "next-server"; pkill -f "next dev"
+rm -f /tmp/page13*.html /tmp/bundle13*.css /tmp/nextdev13.log
+rm -rf .next
+
+npm run build && npx tsc --noEmit && npm run lint   # final re-check, all clean
+```
+
+**How this moves the build forward:** `OrderStatusIndicator`/`ORDER_STATUS_STYLES` are done, verified, and ready to reuse directly in Phase 3's `OrderRow` — including the directional-border lesson, which won't need rediscovering there. Step 19 (`RecentActivityFeed`) is the last dashboard section left to design.
+
+## Steps 20 & 21 — Per-section skeletons and error boundaries (combined, at the user's request)
+
+**What was done:** Added shadcn's `Button` and `Skeleton` primitives. Built a skeleton for each of the four dashboard sections, colocated in the same file as the real component (`SummaryCardsSkeleton`, `ChartsSectionSkeleton`, `RecentOrdersListSkeleton`, `RecentActivityFeedSkeleton`), replacing the temporary `SectionFallback` from step 14. Built `components/shared/error-boundary.tsx` (a minimal hand-rolled class component — React's error-boundary lifecycle methods, `getDerivedStateFromError`/`componentDidCatch`, only exist on class components, so this is one of the few legitimate uses of one in this codebase) and `components/shared/section-boundary.tsx` (wraps it with a retry button, `router.refresh()`, and a `key`-remount to force a clean re-mount rather than trying to time a manual state reset against `refresh()`'s async completion). Wired both into `app/page.tsx` around all four sections, and added `app/loading.tsx` (composes the same four skeletons, for route-level navigation) and `app/error.tsx` (the route-level safety net for anything outside a `SectionBoundary`).
+
+**A deliberate decision made explicit before writing code: hand-roll the error boundary, not add `react-error-boundary`.** Considered the library — it exists for exactly this. But the reset strategy chosen (`key`-remount) bypasses its actual differentiator (`resetKeys`/`onReset`), and React's error-boundary API isn't something that's easy to get subtly wrong the way `next-themes`' SSR hydration script was — it's two lifecycle methods with a well-documented contract. No new dependency where the project's own "no dependency without a real reason" standard wasn't clearly met.
+
+**A real, worth-naming architectural limitation, stated in the code itself, not discovered by accident:** `SectionBoundary`'s retry can't re-run just the failed section — it's a Server Component, and the only public API to re-invoke one is `router.refresh()`, which re-executes the *entire* page's Server Component tree. Clicking retry on one broken section re-fetches every section's data, not only the failed one. Documented this directly in the component's own comment, since it's a real cost of the per-section-boundary architecture worth being able to explain, not something to discover only when asked.
+
+**A heading-placement question resolved by keeping the existing structure, not restructuring four files.** Each section's `<h2>` lives inside the async Server Component itself, gated behind the same Suspense boundary as its data — so a truly faithful skeleton needs the identical heading shown immediately. Considered lifting headings into the static shell (`app/page.tsx`) so they'd never be gated on data at all, but `ChartsSection` has *two* sub-headings under one boundary, which doesn't map cleanly onto "one heading per section" in a lifted structure. Chose the simpler, uniform rule instead: every skeleton duplicates its real component's exact heading markup. A small, explainable duplication (one string, one JSX line, four times) rather than a bigger structural change with an awkward edge case.
+
+**Three real things found during verification — not assumed correct from a clean build:**
+
+1. **Streaming genuinely proven, not just assumed.** Fetching the fully-resolved page via `curl` unexpectedly still contained skeleton markup (`animate-pulse`) *and* `<template>` tags — at first this looked like a bug, until recognizing it as direct evidence of how React's streaming SSR actually works: the Suspense fallback is sent first in the stream, then the real content arrives in a later chunk with a swap script. Rather than noise, this was confirmation that the skeleton is genuinely what gets streamed as the initial fallback, not just correct in isolation from its own source code.
+
+2. **A real methodology gap caught: testing error boundaries against the dev server doesn't reflect production.** The first attempt to verify `SectionBoundary` (the same temporary-throw technique from steps 14/18) found the RSC payload contained a Next.js dev-mode-specific message: *"Switched to client rendering because the server rendering errored."* Dev mode intercepts a Server Component error for its own error-overlay tooling, bypassing the custom `ErrorBoundary` entirely — a behavior that doesn't exist the same way in production. Recognized this as a real gap in the test, not a reason to conclude the boundary was broken, and rebuilt + ran an actual production server (`npm run build && npm run start`) to re-test properly.
+
+3. **A `curl`-based false read, caught by checking for real values specifically, not just structural markup.** Against the production build, the response still appeared to show `SummaryCards`' card markup successfully — until checking for the *actual formatted values* (`45,59,700`, `>200<`) specifically, which were absent; what was present was `SummaryCardsSkeleton`'s markup, which also wraps the real `Card` component and so produces near-identical `data-slot="card"` structure. Traced the deeper reason to the same category of limitation hit with the theme toggle and Recharts in earlier steps: resolving a Server Component error into a rendered `ErrorBoundary` fallback happens via a script tag that requires the *browser* to execute JavaScript during hydration — `curl` can only ever capture the initially-streamed skeleton, identically for both the loading and error cases, since both start from the same fallback. This isn't a bug; it's a fourth instance of the same disclosed browser-automation gap, now specifically located to "post-error client-side resolution."
+
+**What was still verified, despite that gap:** the error is genuinely thrown and logged server-side (confirmed in both dev and production server logs); in production, no error message or stack trace leaks into the client response — only a digest hash — which is correct, secure default Next.js behavior, not something this build had to implement; and, most importantly, the other three (non-failing) sections in the *same* response resolved with real, correct content (real order statuses, real Bangladeshi customer names, real Recharts SVG output) while `SummaryCards` was failing — direct proof that failure isolation holds at the framework level, independent of whatever the failed section's own final rendered state turns out to be once a browser processes it.
+
+**Verification:** `npm run build` + `npx tsc --noEmit` + `npm run lint` all clean, both before and after the temporary throw was applied and reverted. Confirmed via a real production build+start (not just dev) that: normal operation renders all real data correctly with zero trace of the test change afterward; the thrown error is logged server-side; production error responses are properly sanitized (digest-only, no leaked message/stack); and sibling sections resolve independently of a failing one.
+
+**Commands run:**
+```
+echo "n" | npx --yes shadcn@latest add button skeleton -y
+# → Created components/ui/button.tsx, components/ui/skeleton.tsx
+grep -c "rounded-lg border border-border" components/ui/card.tsx    # → 1, still intact
+grep -n "shadow-xl" components/ui/chart.tsx
+# → only in my own explanatory comment, not reintroduced as a class
+
+# (built error-boundary.tsx, section-boundary.tsx, 4 skeletons, wired
+#  into app/page.tsx, built app/loading.tsx and app/error.tsx)
+
+npm run build && npx tsc --noEmit && npm run lint    # all clean
+
+nohup npm run dev > /tmp/nextdev15.log 2>&1 & disown
+curl -s http://localhost:3000 -o /tmp/normal.html -w "HTTP %{http_code}\n"   # → 200
+grep -o 'animate-pulse[^"]*' /tmp/normal.html | head -3
+grep -o '\$S1\|<template' /tmp/normal.html | head -3
+# → confirms skeleton genuinely streams as the initial fallback
+
+cp components/dashboard/summary-cards.tsx /tmp/summary-backup2.tsx
+sed -i 's|const summary = await getSummaryStats();|...throw new Error(...)|' \
+  components/dashboard/summary-cards.tsx
+curl -s http://localhost:3000 -o /tmp/fail3.html -w "HTTP %{http_code}\n"
+# → RSC payload contains "Switched to client rendering because the
+#   server rendering errored" — a dev-mode-only behavior
+
+pkill -f "next-server"; pkill -f "next dev"
+npm run build      # succeeded (force-dynamic ⇒ no build-time execution)
+nohup npm run start > /tmp/nextstart.log 2>&1 & disown
+curl -s http://localhost:3000 -o /tmp/prodfail.html -w "HTTP %{http_code}\n"
+grep -i "error" /tmp/nextstart.log   # → ⨯ Error: TEMP failure test (logged)
+python3 -c "... check for real values vs skeleton-only markup ..."
+# → no real values present; only skeleton markup — client-side error
+#   resolution isn't observable via curl (same class of gap as the
+#   theme toggle / Recharts rendering)
+python3 -c "... check other sections for real content in same response ..."
+# → real order statuses, real Bangladeshi names, real Recharts SVG all
+#   present — isolation confirmed at the framework level
+
+pkill -f "next-server"; pkill -f "npm run start"
+cp /tmp/summary-backup2.tsx components/dashboard/summary-cards.tsx   # reverted
+grep -c "TEMP failure" components/dashboard/summary-cards.tsx   # → 0, confirmed clean
+
+rm -rf .next && npm run build && npx tsc --noEmit && npm run lint   # final re-check, clean
+nohup npm run start > /tmp/nextstart2.log 2>&1 & disown
+curl -s http://localhost:3000 -o /tmp/final.html -w "HTTP %{http_code}\n"
+python3 -c "... confirm real revenue/order values present, no TEMP leftover ..."
+# → all real data correct, zero trace of the test
+
+pkill -f "next-server"; pkill -f "npm run start"
+rm -rf .next; rm -f /tmp/*.html /tmp/summary-backup2.tsx /tmp/next*.log
+```
+
+**How this moves the build forward:** Phase 2 (the dashboard) is now fully complete — every section is designed, has a matching skeleton, and has independent error handling with a documented, honest account of what retry actually does and doesn't isolate. The methodology lesson (dev-mode error interception differs from production) applies directly to Phase 3's `OrdersTable`/`OrderRow` error states too, and won't need rediscovering there.
+
+## Step 19 — Design RecentActivityFeed properly
+
+**What was done:** Redesigned `RecentActivityFeed` with a small neutral icon per activity type (`PackagePlus`/`RefreshCw`/`UserPlus`/`Undo2` from `lucide-react`, in a muted circle) instead of the plain timestamp-then-text line it had before, wrapped in the same `Card`-with-zeroed-padding-and-divided-rows structure as `RecentOrdersList` from step 18.
+
+**Why the icons are deliberately neutral, not color-coded like order status.** `system.md` doesn't specify a pattern for this component at all — this was a genuine design decision, not a lookup. The obvious move would've been to reuse the same left-border-color treatment from order status, but that would apply the *same visual device* to two different kinds of data for no real reason: order status is a genuine state with 5 distinct values worth distinguishing at a glance, while activity is a chronological log where "what kind of event was this" is much lower-stakes information. Doing it anyway would dilute what the color-coding *means* everywhere else on the page — "one accent used with intention" only holds if color isn't spent on things that don't need it. Neutral icons in a circle give the feed real visual structure (per the artifact-design skill's "encode state in form as well as number") without competing with the status color language.
+
+**Applied a step-18 lesson before it caused the same bug again.** Wrote the row divider as `border-b border-b-border` from the start, not `border-border` — even though `RecentActivityFeed`'s rows don't have a competing directional border class the way order rows do (no left-border here), so this specific instance wouldn't have actually broken anything either way. Used the correct form anyway, since it's the generally-correct pattern regardless of whether this particular case would have exposed the bug.
+
+**A real external change noticed and left alone, not silently reverted.** While verifying this step, `RecentOrdersList`'s `RECENT_LIMIT` had changed from `5` to `15` outside this session (the harness flagged it as changed on disk). Left it as-is rather than reverting — per the standing instruction to treat unexplained file changes as probably deliberate and worth surfacing, not overwriting. Confirmed it doesn't affect `RecentActivityFeed`, which has its own separate `RECENT_LIMIT` constant.
+
+**Verification:** `npm run build` + `npx tsc --noEmit` + `npm run lint` all clean. Rendered the real page: confirmed exactly 5 icon-circle elements (matching `RECENT_LIMIT`), confirmed all 5 rows carry the correct divider treatment (4 with `border-b border-b-border`, the last without — the step-18 pattern generalized cleanly here with no repeat of that bug), and confirmed the real activity messages and Bangladeshi names render correctly ("New order ord_0166 placed by Imran Kabir", "New customer Rahim Bhuiyan registered", etc.). One false alarm caught and resolved during verification: an initial `grep -c` on the icon-circle class returned `10`, not the expected `5` — traced this to `grep -c` counting matching *lines*, not occurrences, on HTML that's largely emitted as very few long lines; switching to an occurrence count (and a more specific selector matching the actual `<span>` element) confirmed the real count was `5` all along, with the `10` explained by Next's RSC hydration payload duplicating the class string alongside the rendered HTML — not an actual double-render.
+
+**Commands run:**
+```
+npm run build      # succeeded
+npx tsc --noEmit   # clean
+npm run lint       # clean
+
+nohup npm run dev > /tmp/nextdev14.log 2>&1 & disown
+curl -s http://localhost:3000 -o /tmp/page14.html -w "HTTP %{http_code}\n"   # → 200
+
+grep -c 'bg-muted text-muted-foreground' /tmp/page14.html    # → 2 (misleading: line count)
+grep -o 'bg-muted text-muted-foreground' /tmp/page14.html | wc -l   # → 10 (occurrence count, still not 5)
+grep -o '<span class="flex size-7[^"]*"' /tmp/page14.html | wc -l  # → 5 (the actual real element count)
+# → traced the discrepancy to grep -c counting lines, and the raw
+#   occurrence count including the RSC hydration payload's duplicate
+#   copy of the class string — not a real bug
+
+python3 -c "... extract <li> classes preceding the icon span ..."
+# → 4 rows with 'border-b border-b-border', 1 without (the last) — correct
+
+grep -oE 'New order .*|Order .* marked as .*|New customer .* registered|Refund issued .*' /tmp/page14.html | head -6
+# → 5 real activity messages with real Bangladeshi names, correct
+
+grep -i "error\|warn" /tmp/nextdev14.log   # → none
+
+pkill -f "next-server"; pkill -f "next dev"
+rm -f /tmp/page14.html /tmp/nextdev14.log
+rm -rf .next
+```
+
+**How this moves the build forward:** all five dashboard sections (Overview, Revenue, Orders chart, Recent orders, Recent activity) are now fully designed to the confirmed direction, verified against real rendered output. Phase 2's remaining work is loading skeletons (step 20) and per-section error boundaries (step 21) — the polish that completes the Suspense architecture from step 14's revision, not new features.
+
+## Phase 2b (steps 21.1–21.8) — Dashboard density & composition pass
+
+**Why this phase exists at all.** After Phase 2 was reviewed on a real screen (not just in code), the dashboard read as flat despite every individual piece matching the confirmed Khata spec. Two rendered specimen artifacts drove the diagnosis before any code changed: https://claude.ai/artifact/8YpmauiFaGuMrMNTfsoYcG (original direction) and https://claude.ai/artifact/R8K26YFZEYLehT8QvZh2jA (the density study that led to this phase). Research into shipped dashboards (Linear, Stripe, Vercel teardowns) converged on the same diagnosis unprompted — one source described the canonical "AI-generated dashboard" as "a left sidebar, a top bar, four stat cards in a row, one line chart, and a table," which matched our page on four of five counts. The root cause wasn't color — it was landing-page spacing and uniform hierarchy applied to a data surface that needed to function like an instrument panel.
+
+**A retraction, recorded because it matters for how this gets read.** An earlier recommendation (mid-conversation, before any Phase 2b code) was to widen the light/dark surface-elevation step in `globals.css`. That was **retracted** once measured against Linear's actual published values (`#08090a`/`#0f1011`/`#23252a` — a surface step of about the same size ours already had). No color token from the original confirmation changed in this phase. The one new token (`--grid-line`, step 21.5) is additive, not a revision of an existing value — it exists because panels finally have distinct shapes for a second, subtler rule to differentiate itself from.
+
+**What was built, step by step:**
+
+- **21.5 (built first, since 21.1/21.2/21.4 depend on it) — `--grid-line` token.** Added to `globals.css` in both themes, lighter than `--border` (`rgba(36,29,22,.06)` light / `rgba(243,236,223,.06)` dark vs. border's `.10`–`.16`). `--border` still marks a panel's outer edge; `--grid-line` marks a rule *inside* one — chart gridlines, ledger row dividers. Mapped through `@theme inline` so Tailwind generates `border-grid-line`/`stroke-grid-line` utilities automatically, same mechanism as every other semantic token already in the file.
+
+- **21.1 — 12-column grid in `app/page.tsx`.** KPI strip (hero revenue 6/12 + three compact tiles 2/12 each), charts row (revenue 8/12, orders 4/12), content row (recent orders 7/12, recent activity 5/12). Section gaps went from `gap-8` (32px) to `gap-3` (12px); grid gutters are `gap-2` (8px). The two-Suspense-boundary content row (`RecentOrdersList` + `RecentActivityFeed`) stays two independent Suspense/`SectionBoundary` pairs — they're just laid out as grid siblings now instead of stacked divs; nothing about the Phase 2 streaming/error-isolation architecture changed, only the CSS arrangement around it. All four skeletons (`SummaryCardsSkeleton`, `ChartsSectionSkeleton`, `RecentOrdersListSkeleton`, `RecentActivityFeedSkeleton`) were rewritten in the same commit-worthy unit of work as their real counterparts — a skeleton that doesn't match its real layout causes a visible jump when the real content streams in, which would be a regression, not neutral.
+
+- **21.2 — Charts housed, Y axis added.** Both `RevenueChart` and `OrdersChart` gained a `YAxis` (revenue's lakh-scaled via a new `formatCurrencyCompact()` in `lib/format.ts` — `৳1.5L`, not a raw number; orders' left as plain integer counts via `allowDecimals={false}`). Before this, the charts showed *shape* with no *magnitude* — a spike with no way to tell if it was ৳50,000 or ৳5,00,000. Both charts also gained a `className` prop (default `h-32`, compact) so the same component can render taller inside the new expand dialog without a second component.
+
+- **21.3 — Type pass.** Removed `font-extrabold` (800) from every hero and compact figure in `SummaryCards`; new weight band is 400–600 (500 on figures). Explicit tracking values replace ad hoc ones: `-0.018em` on the hero figure, `-0.012em` on compact figures. The page's `<h1>Dashboard</h1>` is now `sr-only` rather than a visible heading — the nav bar already marks the active page visually, so a second same-weight label right above the KPI strip was competing with it for no benefit; kept (not deleted) for screen readers, since no other landmark states page identity.
+
+- **21.4 — Ledger treatment for `RecentOrdersList`.** Rewritten from a `<ul>` of flex rows into a real `<table>`: date / particulars (order id + customer name) / status / amount columns. The 3px status-color "stamp" moved from the row's left border (not expressible on a `<tr>` under `border-collapse`) to the date cell's left border — same visual device, correct element. Cancelled/refunded orders render red-ink with parenthesised amounts (`(৳14,600.00)`, real double-entry-bookkeeping convention) via a local `NEGATIVE_STATUSES` set that mirrors — but doesn't import — `getSummaryStats()`'s private `SPENT_STATUSES`, since importing would couple a display decision to an unexported implementation detail. A `<tfoot>` row sums the visible rows as "Net · 8 shown" under a `border-double` rule — a real double ruled total, not a decorative border-width trick (`border-style: double` genuinely renders as two parallel hairlines). Row count went from 5 to 8. `RECENT_LIMIT` in `RecentActivityFeed` was deliberately left at 5 — not asked for, and there was no reason for the two lists to move in lockstep.
+
+- **21.6 — `ExpandableChart` + the corner expand control.** New `components/shared/expandable-chart.tsx` wraps shadcn's `Dialog` (added via `shadcn add dialog`; its `DialogContent`/`DialogFooter` had the exact same `ring-1 ring-foreground/10` + `rounded-xl` drift `card.tsx` (step 15) and `chart.tsx` (step 16) had — fixed at the source the same way, third time this exact pattern has shown up in a shadcn primitive). The expand button is always visible, not hover-gated (hover-only would be undiscoverable on a dashboard and dead on touch), sized via the button primitive's existing `icon-xs` variant. Both charts' `margin.right` went from 8 to 20 so the button never sits on top of the last date label — a small, permanent, unconditional reservation rather than logic that only applies "when a button is present."
+
+  **A real bug found only by running the actual server, not by tsc/lint/build.** The first version of `ExpandableChart` took a `renderExpanded: () => ReactNode` render-prop, matching the pattern used in the throwaway browser-only mockup artifact. `ChartsSection` (a Server Component) passing that closure into `ExpandableChart` (`"use client"`) built cleanly, typechecked cleanly, and linted cleanly — then threw at request time in production: *"Functions cannot be passed directly to Client Components... Or maybe you meant to call this function rather than return it."* Functions aren't serializable across the RSC boundary; only rendered elements are (the same reason `children` works from Server to Client Components at all). Fixed by changing the prop to `expanded: ReactNode` — the Server Component constructs both the compact and expanded chart elements directly and passes both down as ordinary props. This is the kind of gap the project's established verification discipline (curl/production testing beyond just `next build`) exists to catch, and did.
+
+- **21.7 — Real period deltas, sequenced last.** `getSummaryStats()` now returns `revenueDelta`, `ordersDelta` (a new `PeriodDelta` type — signed fraction + up/down/flat direction), and `revenueSparkline` (last 30 days of daily revenue). The comparison window is trailing-30-days vs. the prior 30, anchored on the *latest order's own timestamp* rather than `Date.now()` — the mock dataset is a fixed ~90-day window, so anchoring on real wall-clock time would silently drift the window away from where the data actually is as real time passes. `bucketByDay()` was extracted as a shared helper so `getSummaryStats()`'s 30-day sparkline bucketing and `getRevenueTimeseries()`'s full-range bucketing aren't two copies of the same loop. **Deliberately incomplete, on purpose:** `.interface-design/system.md` already had a standing rule against fabricating trend data, and it was honored literally — Active Customers and Conversion Rate get **no** delta, because the mock dataset has no per-period join tracking (`Customer.active` is a point-in-time boolean, not a per-period signal) and no per-period visitor counts (`mock-analytics.json`'s `totalVisitors` is a single all-time figure). Two of four KPI tiles show a real, computed trend; two don't, and the code comments say why rather than leaving it looking like an oversight.
+
+- **21.8 — `.interface-design/system.md` brought back in sync.** Added a dated revision note at the top rather than silently rewriting the original spec (the original numbers are still visible as "what changed and why," not erased); updated the spacing/type-scale tables to the numbers actually in the code now; documented the summary-card restructure, the real-deltas-with-explicit-exceptions rule, the housed/scaled charts, and the ledger treatment; added `--grid-line` to the color table with a one-line explanation of how it differs from `--border`.
+
+**Verification.** `npx tsc --noEmit`, `npm run lint`, and `npm run build` all clean on the first pass — none of them caught the RSC function-prop bug above, which only surfaced running `npm run start` against a real request. After the fix: rebuilt, ran the production server, and independently recomputed the period deltas in a standalone Node script directly against `mock-orders.json` (not trusting the UI's own math) — got 36.8% (revenue) and 3.1% (orders), which matched the rendered HTML exactly. Confirmed via raw HTML inspection: the real revenue figure (`৳45,59,700`), both expand-button `aria-label`s (absent before the fix, present after), the ledger's `Net · 8 shown` total, four parenthesised red-ink amounts among the 8 rendered rows, both `border-grid-line`/`stroke-grid-line` utilities compiled into the production CSS bundle resolving to the correct per-theme values, zero remaining `font-extrabold` in any dashboard component, and the `sr-only` `<h1>` present for accessibility. One known, disclosed verification boundary, consistent with every prior step: whether the dialog visually opens, the chart genuinely re-renders larger inside it, and the expanded axis shows more resolution are all client-side-only behaviors `curl` cannot observe — confirmed instead that `DialogContent` correctly does *not* appear in server HTML while closed (consistent with expected portal/mount behavior, not a bug), which is as far as this environment's tooling can verify without a browser.
+
+**Commands run:**
+```
+npx shadcn@latest add dialog -y   # (piped "n" to any overwrite prompt) → dialog.tsx added, button.tsx skipped (identical)
+
+npx tsc --noEmit    # clean
+npm run lint        # clean
+npm run build       # succeeded
+
+# first production run — surfaced the real bug:
+npm run start > /tmp/dashboard-prod.log 2>&1 &
+curl -s http://localhost:3000/ -o /tmp/dashboard.html
+cat /tmp/dashboard-prod.log
+# → "Error: Functions cannot be passed directly to Client Components..." x2 (Revenue + Orders panels)
+
+# fixed ExpandableChart's renderExpanded closure → expanded ReactNode prop, updated call sites
+
+kill -9 <lingering next-server pid>   # a prior server hadn't exited cleanly
+npm run build                          # succeeded
+npm run start > /tmp/dashboard-prod2.log 2>&1 &
+curl -s http://localhost:3000/ -o /tmp/dashboard2.html
+cat /tmp/dashboard-prod2.log           # → clean, no errors
+
+grep -o 'aria-label=.\{0,40\}' /tmp/dashboard2.html | grep -i expand
+  # → aria-label="Expand Revenue chart", aria-label="Expand Orders chart"
+grep -oE '[0-9]+\.[0-9]%' /tmp/dashboard2.html | sort -u   # → 3.1%, 3.5%, 36.8%
+grep -o 'Net.\{0,25\}' /tmp/dashboard2.html                 # → "Net · 8 shown"
+grep -o '(৳[0-9,]*\.[0-9]*)' /tmp/dashboard2.html | sort -u # → 4 parenthesised red-ink amounts
+grep -o '<h1[^>]*>Dashboard</h1>' /tmp/dashboard2.html      # → class="sr-only", present
+
+node -e "... independently recompute revenueDelta/ordersDelta straight from mock-orders.json ..."
+  # → 36.8% / 3.1%, matching the rendered page exactly — confirms periodDelta() math, not just its presence
+
+grep -o '\.border-grid-line{[^}]*}' .next/static/chunks/*.css   # → resolves to var(--grid-line)
+grep -o '\.stroke-grid-line{[^}]*}' .next/static/chunks/*.css  # → resolves to var(--grid-line)
+grep -o '\-\-grid-line:[^;]*' .next/static/chunks/*.css        # → #241d160f (light), #f3ecdf0f (dark) — both = alpha .06
+grep -rn "font-extrabold" components/dashboard/                # → none (only an explanatory comment)
+grep -o 'data-slot=.dialog-content.' /tmp/dashboard2.html       # → none while closed, as expected
+
+pkill -9 -f "next-server"; pkill -9 -f "npm run start"
+```
+
+**How this moves the build forward:** the dashboard's composition, density, type, and its one real signature (the ledger) are now aligned with how the direction was always meant to read, not just how each token was individually specified. The RSC render-prop lesson (functions can't cross Server→Client boundaries; pass rendered elements instead) applies directly to any future component that needs to hand a Client Component "what to show under some condition" — worth remembering before Phase 3's `FiltersBar`/`OrdersTable` split, which will have a similar Server-shell-feeds-Client-component shape. Phase 3 (orders page) is next; step 49b (revisiting the per-section Suspense architecture) still explicitly waits for the Phase 7 performance pass, unaffected by this phase's changes.
+
+### Follow-up fixes (same session, after review on a real screen)
+
+The user reviewed the phase on an actual desktop screenshot (with the revenue chart expanded) and asked two things: whether the mobile layout actually holds up, and to fix a visible dialog problem. Both led to real, confirmed bugs — none of which `tsc`/`lint`/`build` had any way to catch, since they're either purely visual (the dialog collision was visible in the screenshot itself) or breakpoint-conditional (only apply below `lg`, which the build doesn't render at any particular width).
+
+- **`HeroStat` had no mobile column span.** `className="lg:col-span-6"` only applies at `lg`+ — below that, a grid item with no span class defaults to spanning 1, so on the mobile `grid-cols-2` grid the revenue tile rendered at the *same half-width* as "Total orders" beside it. The one figure meant to lead collapsed to parity with everything else exactly on the viewport where hierarchy matters most, since there's no side-by-side chart/table context to lean on there. Same bug existed in `SummaryCardsSkeleton`'s hero card — fixed both together so they still match.
+
+- **Three compact tiles don't divide evenly into a 2-column mobile grid.** Fixing the above surfaced a second issue: with the hero now correctly full-width, the three compact tiles (Total orders / Active customers / Conversion rate) were sitting in a `grid-cols-2` grid — two filled a row, the third sat alone with an empty cell beside it. Switched the mobile grid to `grid-cols-3` (hero `col-span-3`, full row; each compact tile `col-span-1`, filling the row beneath evenly) rather than `grid-cols-2`. This is a case where fixing a reported bug immediately revealed an adjacent one the report didn't mention — worth checking neighboring code for the same class of mistake, not just the exact line pointed at.
+
+- **Dialog close button overlapping the meta text (visible directly in the user's screenshot).** shadcn's `DialogContent` renders its close button `absolute top-2 right-2`. `ExpandableChart`'s modal header put the meta string (`"daily · ৳ lakh"`) flush right via `justify-between`, landing directly under that button. Fixed with `pr-9` on the header row — enough clearance for the button's footprint (`icon-sm`, 28px, offset 8px from the edge) without touching the shared `dialog.tsx` primitive, since this collision is specific to how *this* header composes content edge-to-edge, not a defect in the primitive itself.
+
+- **Dialog width capped at 768px regardless of screen size.** The user asked for it to grow on larger screens — the entire point of the expanded view is more resolution, and a fixed cap left most of a desktop monitor unused (visible in the screenshot: the modal occupied roughly 60% of the visible width). Changed to `sm:max-w-2xl lg:max-w-4xl xl:max-w-5xl`, scaling from 672px up to 1024px as viewport grows.
+
+**Verification.** `tsc`, `lint`, and `build` clean. Ran the production server again and confirmed via raw HTML/CSS inspection: `col-span-3 lg:col-span-6` present on the hero card, both `SummaryCards` and `SummaryCardsSkeleton` using `grid-cols-3`, `pr-9` compiled to real CSS, and all three responsive dialog-width utilities (`sm:max-w-2xl`, `lg:max-w-4xl`, `xl:max-w-5xl`) present in the production CSS bundle under their correctly-escaped selectors. The same limitation as before applies to the collision fix specifically: confirming the button and text no longer visually overlap needs an actual rendered viewport, which this environment doesn't have — the fix is dimensionally sound (computed against the button's actual size and offset, not guessed) but not eyeballed against a live render.
+
+**Commands run:**
+```
+npx tsc --noEmit && npm run lint    # clean
+rm -rf .next && npm run build       # succeeded
+
+kill -9 <stale next-server pid>     # a previous run's server hadn't exited
+npm run start > /tmp/dashboard-prod4.log 2>&1 &
+curl -s http://localhost:3000/ -o /tmp/dashboard4.html
+cat /tmp/dashboard-prod4.log        # clean, no errors
+
+grep -o 'class="[^"]*col-span-3 lg:col-span-6[^"]*"' /tmp/dashboard4.html   # → hero card confirmed
+grep -o 'grid grid-cols-3[^"]*' /tmp/dashboard4.html                        # → both real + skeleton grids
+grep -o '\.pr-9{[^}]*}' .next/static/chunks/*.css                           # → padding-right compiled
+grep -o '\.sm\\:max-w-2xl{[^}]*}\|\.lg\\:max-w-4xl{[^}]*}\|\.xl\\:max-w-5xl{[^}]*}' .next/static/chunks/*.css
+  # → all three present, resolving to --container-2xl/4xl/5xl
+grep -o 'aria-label="Expand[^"]*"' /tmp/dashboard4.html                      # → both still present
+
+pkill -9 -f "next-server"; pkill -9 -f "npm run start"
+rm -rf .next; rm -f /tmp/dashboard*.html /tmp/dashboard-prod*.log
+```
+
+**How this moves the build forward:** confirms a real-screen review still catches things a clean build/lint/tsc pass can't — worth doing at the end of every visual phase, not just when something looks obviously wrong. No changes to Phase 3's plan; still next.
+
+## Phase 2c (steps 21.9–21.14) — Dashboard richness (Tier A)
+
+**Why this phase exists.** Before starting the orders page, the user asked what more the dashboard could meaningfully show — an explicit research request ("run a check and let me know"), not a build request. That led to a plan-mode audit of every field already sitting in `mock-orders.json`/`mock-customers.json` but never surfaced, checked against real aggregation (not just "the field exists" — a throwaway Node script confirmed each candidate produces a non-degenerate distribution before it made the menu). The full menu, split into Tier A (zero new mock data) and Tier B (would need a new field — payment method, courier, region, all grounded in `.interface-design/system.md`'s own stated Bangladesh e-commerce direction but never actually captured on `Order`), is recorded in `plan.md`'s "Dashboard metrics" section. The user picked Tier A core: order status breakdown, top products by revenue, average order value, cancellation/refund rate — deliberately not all seven Tier A candidates, weighed against the Stripe/Linear "four KPI cards, nothing else competing" research from before the Phase 2b density pass. Tier B stays documented, not built.
+
+**What was built:**
+
+- **Types** (`lib/types/analytics.ts`): `StatusBreakdownPoint` (`{status, count}`), `TopProduct` (`{productName, revenue, unitsSold}`), and `averageOrderValue` added to `AnalyticsSummary`.
+- **Service layer** (`lib/api/analytics.ts`): `getOrderStatusBreakdown()` counts all 5 statuses explicitly (via a local `ALL_STATUSES` array, not derived from the data) so a status with zero current orders still appears at count 0 rather than silently vanishing from the breakdown. `getTopProducts(limit)` aggregates every spent-status order's `items[]` by product name, summing `quantity × unitPrice` and units sold — data that's been fetched on every order since step 7 and never once aggregated anywhere until now. `getSummaryStats()` gained `averageOrderValue`, computed as `totalRevenue ÷ spentOrders.length`, **not** `÷ orders.length` — roughly a quarter of orders are cancelled/refunded and contribute nothing to revenue, so dividing by all 200 would understate what a completed sale actually averages. This is exactly the kind of metric-definition reasoning the "AI-assisted development quality" criterion wants visible, not just the resulting number.
+- **Shared status→color** (`components/orders/order-status.tsx`): added `ORDER_STATUS_COLOR_VAR` (raw `var(--chart-3)` etc.) alongside the existing Tailwind-class `ORDER_STATUS_STYLES` — Recharts' `<Cell fill>` needs an actual color value, not a class name, so this is a second *form* the mapping has to exist in, not a second decision about what it should be; both stay hand-in-sync by construction since they're defined in the same file. Also promoted `NEGATIVE_ORDER_STATUSES` (cancelled/refunded) from a locally-duplicated set in `recent-orders-list.tsx` to a shared export here, since the status-breakdown's cancellation-rate figure is the exact same domain rule at a second real call site — the point where local duplication stopped being the more honest choice. `recent-orders-list.tsx` now imports it instead of re-declaring it.
+- **`StatusDonut`** (`components/dashboard/status-donut.tsx`, Client Component): a minimal Recharts `PieChart`/`Pie`/`Cell` donut with no tooltip — the adjacent legend already shows exact counts, so a hover tooltip would just repeat it. Passes an empty `{}` as `ChartContainer`'s config since nothing here uses the tooltip/legend theming machinery that prop exists for.
+- **`OrderStatusBreakdown`** (`components/dashboard/order-status-breakdown.tsx`, Server Component): fetches the breakdown once, renders the donut plus a legend list (dot + label + count per status, reusing `ORDER_STATUS_STYLES`), and derives the cancellation/refund rate from that same array rather than a second fetch or a second service-layer call.
+- **`TopProducts`** (`components/dashboard/top-products.tsx`, Server Component): a **ranked list, not a chart** — five items read faster as ranked rows than as a bar chart, and this reuses the ledger's own row/rule/`tabular-nums` conventions from Phase 2b rather than inventing a third numeric-display pattern.
+- **Layout**: a new insights row in `app/page.tsx` between the charts row and the recent-orders/activity row — `OrderStatusBreakdown` (5/12) + `TopProducts` (7/12), each its own `Suspense`/`SectionBoundary` pair. This is a genuinely new data dependency (order aggregation, not the revenue timeseries `ChartsSection` already owns), so per the project's own "sections follow data dependencies, not visual boxes" rule it's a new section, not folded into an existing one. `SummaryCards`' KPI strip resized from 4 tiles to 5 to fit AOV: hero `lg:col-span-4` (was 6) + four compacts `lg:col-span-2` each; mobile `grid-cols-4` (was 3), hero `col-span-4` (an *explicit* base-breakpoint span, not just an `lg:` one — directly applying the lesson written into `step.md`'s standing rules after last session's bug) + compacts `col-span-1` each, filling the row beneath exactly. `app/loading.tsx` got the matching skeleton row in the same step, not after.
+
+**A small thing caught and fixed while writing it, not after:** the first draft of `HeroStat`'s className was `"col-span-4 lg:col-span-4"` — a redundant `lg:` override repeating the same value the base breakpoint already set. Simplified to plain `col-span-4` once noticed, since 4/4 on the mobile grid and 4/12 on desktop are both correctly expressed by the same literal with no override needed. Caught the identical redundancy in the skeleton's matching Card a moment later and fixed that too, before either shipped.
+
+**Verification.** `tsc`, `lint` (one pre-existing, unrelated warning — see below), and `build` all clean. Production server run with no errors. Every number was independently recomputed in a standalone Node script directly against `mock-orders.json` — not trusting the UI's own math, same discipline as Phase 2b's delta check:
+
+- AOV: script → ৳31,446.21; rendered page → ৳31,446.21 (exact match)
+- Top 5 products by revenue: script → 27-inch Monitor ৳11,22,000 (51 sold), Standing Desk Converter ৳10,23,000 (66 sold), Noise-Canceling Headphones ৳6,88,500 (81 sold), Portable SSD 1TB ৳6,05,200 (68 sold), Mechanical Keyboard ৳2,52,000 (56 sold) — every figure found verbatim in the rendered HTML
+- Status counts: script → pending 19, processing 34, completed 92, cancelled 30, refunded 25; all five found exactly in the rendered legend
+- Cancellation/refund rate: script → 27.5%; rendered page → 27.5%
+
+One thing worth naming: none of this was fabricated to look precise — the service-layer functions and the verification script use completely independent code paths (one in the app, one a throwaway script reading the same JSON directly), so an exact match across roughly a dozen numbers is real confirmation, not coincidence.
+
+**Noticed, not touched:** `lib/api/client.ts` has changed outside this session — `mockFetch` now defaults to a random 1–2000ms delay (`generateRandomDelay()`) instead of the fixed 500ms `DEFAULT_DELAY_MS`, which is now dead code (a lint warning, not an error). Per the standing rule on unexplained external changes, this wasn't silently reverted or "fixed" — flagged to the user instead, since it's a real behavioral change (section loading times are now inconsistent instead of predictable) that wasn't part of this phase's scope.
+
+**Commands run:**
+```
+npx tsc --noEmit    # clean
+npm run lint        # 1 pre-existing warning (lib/api/client.ts, unrelated to this phase), 0 errors
+rm -rf .next && npm run build   # succeeded
+
+kill -9 <stale next-server pid>
+npm run start > /tmp/dashboard-2c.log 2>&1 &
+curl -s http://localhost:3000/ -o /tmp/dashboard-2c.html -w "HTTP %{http_code}, %{time_total}s\n"
+  # → HTTP 200, ~1.95s (consistent with the new random 1-2000ms delay range)
+cat /tmp/dashboard-2c.log   # clean, no errors
+
+grep -o 'Avg\. order value...' /tmp/dashboard-2c.html          # → ৳31,446.21
+grep -o 'grid grid-cols-4[^"]*' /tmp/dashboard-2c.html          # → both real + skeleton grids
+grep -o "Order status\|Top products" /tmp/dashboard-2c.html     # → both headings present
+grep -oE "৳[0-9,]+\.[0-9]{2}" /tmp/dashboard-2c.html | sort -u  # → all 5 top-product revenue figures present
+grep -o '.\{0,15\}sold.\{0,15\}' /tmp/dashboard-2c.html         # → 51/66/81/68/56 sold (split across RSC text nodes)
+grep -oE '"font-medium tabular-nums\\?">[0-9]+' /tmp/dashboard-2c.html | grep -oE '[0-9]+$' | sort -n | uniq -c
+  # → 19, 25, 30, 34, 92 — all 5 status counts, exactly once each
+grep -o '27\.5%' /tmp/dashboard-2c.html                          # → present
+
+node -e "... independently recompute AOV, top 5 products, status counts, cancellation rate directly from mock-orders.json ..."
+  # → every figure matched the rendered page exactly
+
+pkill -9 -f "next-server"; pkill -9 -f "npm run start"
+rm -rf .next; rm -f /tmp/dashboard-2c.html /tmp/dashboard-2c.log
+```
+
+**How this moves the build forward:** the dashboard now surfaces status health, what's actually selling, and a real per-sale average — real ops content, not just volume/count figures — while staying inside the same "four cards, nothing competing" discipline the research argued for. Tier B (payment method, courier, region) stays documented and deliberately unbuilt in `plan.md`, available to revisit without re-deriving the reasoning. Phase 3 (the orders page) is next.
+
+## Density recalibration (post-Phase-2c, on a real screenshot)
+
+**Why this happened.** The user sent an actual full-browser screenshot of the dashboard at 100% zoom on a wide monitor and asked for a look — not a build request yet, an "examine and tell me what you think" request. Checking every explicit size value in the codebase (not just eyeballing) confirmed the observation was real: nearly the entire page sat in a 10–14px range — KPI labels at 10px, every section heading at 12px, table headers at 10px, chart tick labels at 10–11px — with only the two hero KPI figures breaking that range. The container was also capped at `max-w-6xl` (1152px), leaving real dead margin on a genuinely wide window.
+
+**Root cause, named honestly.** This is a direct, traceable consequence of the Phase 2b density research, not a fresh mistake. That pass correctly diagnosed a real problem (landing-page spacing on a data surface) using Linear as a reference point — but Linear is calibrated for power users who live in a tool 8 hours a day and tolerate extreme density as a deliberate tradeoff. This dashboard's actual audience — a grader reviewing it, or a shop owner checking in periodically — is closer to Stripe's audience: wants it to look sharp and be legible *at a glance*, not optimized for maximum data-per-screen over a long session. The whole scale got calibrated against the wrong reference point.
+
+**What was changed — the recalibration table, agreed with the user before any code changed:**
+
+| Element | Before | After |
+|---|---|---|
+| Page container | 1152px (`max-w-6xl`) | 1280px (`max-w-7xl`) |
+| Section headings | 12px | 13px |
+| KPI labels | 10px | 11px |
+| Hero KPI value | 28px | 34px |
+| Compact KPI value | 20px | 24px |
+| Delta badge | 11px | 12px |
+| Table headers, chart panel labels | 10px | 11px |
+| Chart tick labels | 10–11px | 11–12px |
+| Chart height | 128px | 160px |
+| Donut | 128px | 160px (was already bumped once this session, 96→128, for the restructure two turns earlier) |
+| Card padding (KPI tiles, order status) | 12px (`size="sm"`) | 16px (Card's own default — dropped the `sm` prop rather than hand-tuning a new value) |
+| Ledger/list row padding | 12/8px | 16/10px |
+
+Deliberately **not** reverted to Phase 2b's original pre-density-pass spacing (32px gaps, etc.) — that would reintroduce the exact flatness problem Phase 2b fixed. This is a middle point: still tight, still not landing-page-spacious, just recalibrated against a more accurate reference for who's actually looking at it.
+
+**A real bug found and fixed along the way, not just a size bump.** `app-header.tsx` had its own independent `max-w-6xl` on the header's inner container — separate from `app/layout.tsx`'s `<main>`. Widening only the page container would have left the header narrower than the content below it, visibly misaligning the two. Caught before it shipped, not after.
+
+**A real consolidation, done because this pass made it worth it.** The uppercase section heading (`<h2 className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">`) was identical, literal, duplicated markup across 5 files (order status, top products, recent orders, recent activity — real + skeleton version of each). Bumping its size meant editing that same string in all of them regardless, so this was the moment to extract `components/shared/section-heading.tsx` — a `<SectionHeading>` component — rather than editing eight near-identical strings and leaving the duplication for the next person to rediscover. This is exactly the downside of Phase 2b's "explicit px value + comment" approach that was named out loud when proposing this recalibration: no single place to adjust a shared value. One extraction doesn't fix that structurally for every value (KPI figure sizes, chart tick sizes etc. are still separate per-file literals, deliberately — they're not actually identical across contexts the way the heading was), but it fixes the one case that genuinely was the same thing repeated.
+
+**Verification.** `tsc`, `lint` (same one pre-existing unrelated warning from `lib/api/client.ts`), and `build` all clean. Production server run with no errors. Confirmed via raw HTML/CSS inspection: `max-w-7xl` present, `max-w-6xl` completely gone (both `layout.tsx` and the header), all the new literal size classes (13px headings, 34px hero, 24px compact, 40-unit chart/donut heights) compiled and landed on the right elements — and, importantly, the actual data values (`৳45,59,700.00`, `৳31,446.21`) are untouched and still correct, confirming the type-scale edits didn't accidentally disturb any of the number formatting or computation logic they sit next to.
+
+**Commands run:**
+```
+npx tsc --noEmit    # clean
+npm run lint        # 1 pre-existing warning (lib/api/client.ts, unrelated), 0 errors
+rm -rf .next && npm run build   # succeeded
+
+npm run start > /tmp/dashboard-scale.log 2>&1 &
+curl -s http://localhost:3000/ -o /tmp/dashboard-scale.html -w "HTTP %{http_code}\n"   # → 200
+cat /tmp/dashboard-scale.log   # clean, no errors
+
+grep -o "max-w-7xl" /tmp/dashboard-scale.html | sort -u   # → present
+grep -c "max-w-6xl" /tmp/dashboard-scale.html              # → 0, fully removed
+grep -o 'text-\[13px\][^"]*uppercase' /tmp/dashboard-scale.html | sort -u   # → section headings
+grep -o 'text-\[34px\][^"]*' /tmp/dashboard-scale.html      # → hero value
+grep -o 'text-\[24px\][^"]*' /tmp/dashboard-scale.html      # → compact value
+grep -c "h-40" /tmp/dashboard-scale.html                    # → 4 (both charts + skeleton + donut)
+grep -o "h-40 w-40 shrink-0" /tmp/dashboard-scale.html       # → donut confirmed
+grep -o "৳45,59,700.00" /tmp/dashboard-scale.html            # → revenue figure untouched
+grep -o "৳31,446.21" /tmp/dashboard-scale.html               # → AOV figure untouched
+
+pkill -9 -f "next-server"
+rm -rf .next; rm -f /tmp/dashboard-scale.html /tmp/dashboard-scale.log
+```
+
+**How this moves the build forward:** no architectural or data changes — purely a visual recalibration prompted by seeing the real thing on a real screen, which is exactly the kind of gap `tsc`/`lint`/`build` alone can never catch and this project has repeatedly needed a live look to find. Nothing in `step.md` needed a new checkbox for this — it's a refinement within the already-completed Phase 2b/2c scope, not new planned work. Phase 3 is still next.

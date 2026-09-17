@@ -2,6 +2,17 @@
 
 Confirmed direction for the Production Analytics Dashboard. Specimen: https://claude.ai/artifact/8YpmauiFaGuMrMNTfsoYcG
 
+**Revised 17 Sep 2026 (Phase 2b — density & composition pass).** The first
+dashboard build followed this spec correctly on every individual token but
+still read as flat: five full-width sections at one hierarchy level, laid
+out with landing-page spacing on a data surface. This section's sizes,
+weights and padding numbers below are the corrected ones the code now
+actually uses. The color tokens further down were **not** the problem —
+measured against a comparable dense dashboard (Linear), our surface/border
+steps were already in the right range — and are unchanged from the
+original confirmation. Density specimen:
+https://claude.ai/artifact/R8K26YFZEYLehT8QvZh2jA
+
 ## Direction and feel
 
 A shopkeeper's ledger back office — not a generic SaaS dashboard. Grounded in Bangladesh e-commerce: Cash-on-Delivery as the dominant payment mode, courier partners (Pathao, Sundarban, RedX, Steadfast) as the real operational anxiety point, mobile financial services (bKash/Nagad/Rocket) as the market's actual "money moved safely" color language, and the lakh/crore convention for large Taka figures.
@@ -23,21 +34,31 @@ Feel: grounded, efficient, quietly confident with money — not playful, not glo
 
 ## Spacing & density
 
+Revised down in Phase 2b — the original numbers below were landing-page
+spacing applied to a data surface (a dashboard needs to function like an
+instrument panel, not a gallery).
+
 - Base unit: 4px
-- Tables/cards/controls: 12–16px padding (workbench-tight — the orders table needs to stay dense and scannable)
-- Section-to-section gaps: 48px (generous — lets the dense zones breathe against each other, per "vary rhythm on purpose")
+- Grid gutters (between panels): 8px (was 32px between sections)
+- Panel/card padding: 12px via `<Card size="sm">` — shadcn's own density
+  variant, already in the codebase, just not previously used for anything
+  dashboard-facing
+- Chart panels specifically: tighter still (~5–10px) — a plot doesn't need
+  the same breathing room as text, so it doesn't get the same padding
 
 ## Type scale
 
-Not a strict ratio — weight-driven per the skill's own guidance (weight + color separate tiers more cleanly than size alone at this density). Reference sizes:
+Weight band capped at **400–600** — `font-extrabold` (800) was in the
+original hero figures; removed. Hierarchy comes from size + color, not
+boldness. Tracking tightens as size increases:
 
-| Role | Size | Weight | Notes |
-|---|---|---|---|
-| Display (hero figures) | 32px | 800 | `letter-spacing: -0.01em`, tabular-nums |
-| H2 (section headings) | 20px | 700 | |
-| Body | 14px | 500 | |
-| Body secondary | 14px | 400 | `color: ink-secondary` |
-| Label (card labels, table headers) | 11px | 600 | uppercase, `letter-spacing: 0.08em` |
+| Role | Size | Weight | Tracking | Notes |
+|---|---|---|---|---|
+| Hero KPI figure (revenue) | 28px | 500 | −0.018em | tabular-nums, `text-primary` |
+| Compact KPI figure | 20px | 500 | −0.012em | tabular-nums |
+| Body | 14px | 500 | normal | |
+| Body secondary | 14px | 400 | normal | `color: ink-secondary` |
+| Label (card labels, table/ledger headers) | 10–11px | 600 | `tracking-wider` (0.05em) | uppercase |
 
 ## Color — both themes
 
@@ -55,12 +76,20 @@ Dark is not a naive inversion of light — each token keeps its semantic role bu
 | Ink muted | `#8A8072` | `#8F8574` |
 | Border | `#E6DECF` | `rgba(243,236,223,.10)` |
 | Border strong | `#D8CDB8` | `rgba(243,236,223,.16)` |
+| Grid line *(new, Phase 2b)* | `rgba(36,29,22,.06)` | `rgba(243,236,223,.06)` |
 | Success | `#3F7A5C` | `#6FAE8C` |
 | Warning | `#9C6B1F` | `#D1A54B` |
 | Danger | `#A6432E` | `#D97A62` |
 | Neutral status | `#8A8072` | `#A89D8B` |
 
 Distribution: ~60/30/10 — ground/surface/border carry the page, accent is used with intention (interactive/active state, hero currency figures), never decoratively.
+
+**Border vs. grid line.** `Border` marks a panel's own edge. `Grid line`
+is lighter and marks a rule *inside* one — ledger row dividers, chart
+gridlines. Added once panels actually had distinct shapes for an edge to
+bound; before Phase 2b there was only ever one visible boundary per
+section, so a second, subtler rule token had nothing to differentiate
+itself from.
 
 ## Key component patterns
 
@@ -71,7 +100,36 @@ Distribution: ~60/30/10 — ground/surface/border carry the page, accent is used
 - `cancelled` → neutral status (not alarming — a cancellation isn't a failure state)
 - `refunded` → danger
 
-**Summary card (hero stat).** Label: 11px/600/uppercase/tracked/muted. Value: 26–32px/800/tabular-nums/primary ink (or accent for the single most important figure — revenue). No fake deltas/trend arrows — don't invent period-over-period comparison data that doesn't exist in the mock dataset.
+**Summary card (hero stat).** No longer four equal cards — a 12-column
+strip, revenue's tile spanning 6/12 (hero, `text-primary`, 28px/500),
+the other three at 2/12 each (20px/500). Sized by importance, not split
+evenly.
+
+**Period deltas — real ones only, still no fabrication.** The original
+rule stands: don't invent period-over-period data the mock dataset can't
+support. What changed is that revenue and order-count deltas turned out to
+be honestly computable (trailing 30 days vs. the prior 30, from real order
+timestamps) — see `lib/api/analytics.ts`'s `periodDelta()`. Active
+customers and conversion rate still get **no** delta: the mock data has no
+per-period join tracking or per-period visitor counts, so a trend there
+would still be invented.
+
+**Charts are housed, not floating.** Both live in a bordered panel
+(`ExpandableChart`) with a Y axis (lakh-scaled on revenue) — the original
+build had neither, so a chart's shape was visible but its magnitude
+wasn't. Revenue leads at 8/12 columns, orders trails at 4/12, side by side
+at ~128px tall rather than stacked at 256px each. Each panel has an
+always-visible corner control to view the chart full-size in a dialog —
+hover-only would be undiscoverable on a dashboard and dead on touch.
+
+**Recent orders is a ledger, not a list.** Real column structure — date /
+particulars / status / amount — hairline rules between rows (a new,
+lighter `--grid-line` token distinct from `--border`, see the color table
+below), cancelled/refunded rendered in red ink with parenthesised amounts
+(real double-entry convention), and a double-ruled net total
+(`border-style: double`) at the foot. This is the direction's actual
+signature — খাতা is an account book — and was previously only expressed as
+a 3px border.
 
 **Currency formatting.** `৳` prefix + lakh-grouped digits (`৳45,59,700.00`), built manually (not `Intl`'s currency style — see `lib/format.ts`'s own comment for why `en-BD`/`bn-BD` don't give this directly).
 

@@ -33,6 +33,23 @@ export function formatDate(value: string | Date): string {
   return format(toDate(value), "MMM d, yyyy");
 }
 
+// "MMM d" (no year) — was inlined identically in both chart tick
+// formatters plus the ledger's date column (Phase 2b); extracted once a
+// third call site made it a real duplicate rather than a guess at reuse.
+export function formatShortDate(value: string | Date): string {
+  return format(toDate(value), "MMM d");
+}
+
+// Chart-axis-only: "৳1.5L" rather than a full lakh-grouped figure — an
+// axis label needs to be short, not exact. Not used anywhere numbers are
+// read as a precise amount (those stay on formatCurrency).
+export function formatCurrencyCompact(amount: number): string {
+  if (amount === 0) return "৳0";
+  const lakh = amount / 100000;
+  const rounded = Math.round(lakh * 10) / 10;
+  return `৳${rounded % 1 === 0 ? rounded.toFixed(0) : rounded.toFixed(1)}L`;
+}
+
 export function formatDateTime(value: string | Date): string {
   return format(toDate(value), "MMM d, yyyy, h:mm a");
 }

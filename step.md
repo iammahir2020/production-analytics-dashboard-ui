@@ -16,6 +16,15 @@ Each step is a single, reviewable unit of work. Check it off after reviewing, th
 - No unnecessary re-renders; no dependency added without a real reason
 - Keep code simple and direct — no over-engineering, no code that looks meaningful but isn't actually doing anything (see project memory on this)
 - UI must read as deliberately designed — modern, distinctive, and polished, not a generic templated "AI slop" look. See the design checkpoint before Phase 2.
+- **Server → Client Component props carry data or rendered elements, never functions.** A closure passed from a Server Component into a `"use client"` component's props builds and typechecks clean but throws at request time ("Functions cannot be passed directly to Client Components") — only actually running the server catches it. Pass a pre-rendered `ReactNode` instead (same mechanism `children` already uses). Relevant again for Phase 3's `FiltersBar`/`OrdersTable` split (Server shell feeding Client components) — found in Phase 2b's `ExpandableChart`
+- **Every responsive grid/flex span gets an explicit value at the smallest breakpoint it applies to, not just the breakpoint being changed.** `lg:col-span-6` with no base span silently defaults to `col-span-1` below `lg` — it'll build, lint, and typecheck clean, and only show up on an actual narrow screen. Set the mobile-first span, then layer breakpoint overrides on top of it. Found in Phase 2b's `SummaryCards` hero tile
+- **A skeleton changes in the same step as the real layout it shadows, never after.** A mismatched skeleton causes a visible layout jump when real content streams in — that's a regression, not a neutral omission
+- **Any header/content that shares a corner with an absolutely-positioned control (a dialog close button, a corner overlay action) reserves explicit clearance for it.** Edge-to-edge content and a corner overlay don't coexist safely by default — found in Phase 2b's `ExpandableChart` modal header colliding with shadcn's `DialogContent` close button
+- **After any visual/layout phase, do a real-screen review, not just a clean `build`/`lint`/`tsc`.** All four bugs above passed every automated check; none are the kind those tools can catch (one's purely visual, three are breakpoint- or runtime-conditional)
+- **When two or more panels sit as siblings in the same grid row, check they actually match height, not just that the grid "should" stretch them.** `Suspense`/`SectionBoundary`/`ErrorBoundary` render no wrapping DOM element, so the grid's own `align-items: stretch` stops at each panel's outer wrapper `div` — the `<section>`/`Card` inside need explicit `h-full`/`flex-1` to actually fill it. Found between Order status/Top products and again between Recent orders/Recent activity
+- **A page-wide layout value (container max-width, etc.) may exist in more than one independent place.** `app/layout.tsx`'s `<main>` and `components/shared/app-header.tsx`'s header row each hard-coded their own `max-w-*` — changing one without checking for the other would have misaligned the header against the page content. Grep for a value before assuming one edit covers it
+- **Current type/density baseline for any new component (build against this, not Phase 2b's original tighter scale):** page container `max-w-7xl`; section headings 13px via the shared `<SectionHeading>` (`components/shared/section-heading.tsx`) — extract into it rather than re-typing the literal className a 6th time; body/list text 14–15px; card padding 16px (Card's own default — don't reach for `size="sm"` reflexively); chart/donut heights around 160px. Recalibrated from the original Phase 2b numbers, which were correct for fixing flatness but ended up calibrated against Linear's all-day power-user density rather than this app's actual "glanced at, not lived in" audience
+- **A Recharts tooltip that needs more than the raw `dataKey`/`value`** (a real label, a matching color, anything from the underlying domain object) **reads it off `item.payload` in a custom `formatter`**, not off `name`/`value` alone — `name` is often just the raw data key. See `StatusDonut`'s tooltip for the pattern
 
 ## Phase 0 — Project Setup
 
@@ -52,16 +61,50 @@ Each step is a single, reviewable unit of work. Check it off after reviewing, th
 - [x] 13.2. Install `next-themes`; wrap the root layout with `ThemeProvider` (class-based, matching the `.dark` convention already in `app/globals.css`), 3-state (light/dark/system)
 - [x] 13.3. Build `ThemeToggle` (Client Component — needs `next-themes`'s `useTheme` hook)
 - [x] 13.4. Build the shared app shell in `app/layout.tsx`: header with Dashboard/Orders navigation links + `ThemeToggle`, styled to the confirmed Khata direction
-- [ ] 14. Build `app/page.tsx` as a Server Component: parallel-fetch summary stats, revenue timeseries, recent orders, recent activity; pass down as props
-- [ ] 15. Build `SummaryCards` (revenue, orders, active customers, conversion rate) — presentational, server-rendered
-- [ ] 16. Build `RevenueChart` (Client Component, Recharts) — receives pre-shaped data as props
-- [ ] 17. Build `OrdersChart` (Client Component, Recharts)
-- [ ] 18. Build `RecentOrdersList` (server-rendered)
-- [ ] 19. Build `RecentActivityFeed` (server-rendered)
-- [ ] 20. Add `app/loading.tsx` — skeleton matching the dashboard layout
-- [ ] 21. Add `app/error.tsx` — error boundary with retry
+> **Architecture note (decided during step 14):** the page fetches nothing itself. Each section is an async Server Component behind its own `Suspense` boundary, fetching its own data — so one failing/slow source degrades that section alone, sections stream in independently, and each gets its own skeleton. Sections are drawn around *data dependencies*, not visual boxes: both charts read one `getRevenueTimeseries()` call, so they share a section rather than duplicating the fetch.
+
+- [x] 14. Build `app/page.tsx` as a Server Component shell: each section wrapped in its own `Suspense` boundary; sections fetch their own data (summary, recent orders, recent activity)
+- [x] 15. Design `SummaryCards` properly (revenue, orders, active customers, conversion rate) — hero figures per the Khata direction
+- [x] 16. Build `ChartsSection` (async Server Component, fetches `getRevenueTimeseries()`) + `RevenueChart` (Client Component, Recharts) receiving pre-shaped data as props
+- [x] 17. Add `OrdersChart` (Client Component, Recharts) to the same section — same fetch, no duplication
+- [x] 18. Design `RecentOrdersList` properly (ledger-stamp status treatment)
+- [x] 19. Design `RecentActivityFeed` properly
+- [x] 20. Per-section skeletons matching each section's real layout (replacing the temporary `SectionFallback`), plus `app/loading.tsx` for the shell
+- [x] 21. Per-section error boundary with retry (a Client Component wrapping each section), plus `app/error.tsx` for route-level failures
 
 🔖 **Suggested commit point** — dashboard page is complete: summary cards, charts, recent orders/activity, loading and error states.
+
+## Phase 2b — Dashboard density & composition pass
+
+> **Why this phase exists (decided 17 Sep 2026).** The first dashboard pass was reviewed on screen and read as flat: five full-width sections at one hierarchy level, laid out with landing-page spacing on a data surface. Research into how shipped dashboards handle density (Linear, Stripe, Vercel teardowns) confirmed the diagnosis — and independently described our exact page as the canonical AI-generated dashboard. The direction was confirmed against a rendered side-by-side specimen: https://claude.ai/artifact/R8K26YFZEYLehT8QvZh2jA
+>
+> **Colour tokens are not the fix.** Measured against Linear's (`#08090a`/`#0f1011`/`#23252a`), our existing surface and border steps are already in range. An earlier recommendation to widen the elevation step was **retracted** — the flatness was composition and density, and the confirmed specimen proves it by reading as higher-contrast while using the current tokens verbatim. See `learn.md` for the full reasoning.
+>
+> **The signature is the ledger.** খাতা is an account book; that's the one thing here no other generic dashboard arrives at, and it's currently spent on a single 3px border. Step 21.4 is the real differentiator, not the grid.
+
+- [x] 21.1. Restructure `app/page.tsx` onto a 12-column grid — KPI strip (hero revenue tile ~span 6 + three compact), charts row (8/4), content row (7/5); section gap 32px → 12px, gutters 8px, panel padding 16px → 10–12px. **Update all four skeletons to match in the same step** — a skeleton that no longer matches its real layout is worse than no skeleton
+- [x] 21.2. House both charts in bordered panels; add a lakh-scaled `YAxis` (`৳1.5L`, matching `lib/format.ts`'s existing grouping convention); replace the two stacked 256px charts with one side-by-side row at ~128px
+- [x] 21.3. Type pass: cap the weight band at 400–600 (drop `font-extrabold` from hero figures), systematise tracking by size (−0.022em display → +0.02em on small caps), and demote or remove the page `<h1>` since the nav already states location
+- [x] 21.4. **Ledger treatment for `RecentOrdersList`** — date / particulars / status / amount columns, hairline rules between entries, red-ink parenthesised negatives for cancelled + refunded, double-ruled net total, tabular figures throughout; row count 5 → 8. The column structure carries straight into the Phase 3 orders table
+- [x] 21.5. Add an intra-panel hairline token to `globals.css` (both themes) for rules *inside* a panel — lighter than `--border`, which stays the panel-edge token. The only token addition in this phase; no existing value changes
+- [x] 21.6. Build `ExpandableChart` (Client Component wrapping shadcn `Dialog`) + a corner expand affordance, always-visible rather than hover-gated. The expanded view raises tick count, date-label frequency and stroke weight — it shows more, not just bigger. Suppress the last axis label under the button rather than moving the button
+- [x] 21.7. Extend `getSummaryStats()` with a prior-period comparison; add deltas + sparkline to the KPI tiles. **The only item in this phase with service-layer work rather than pure UI** — sequenced last so the visual pass can land without it
+- [x] 21.8. Update `.interface-design/system.md` with the revised density/type/layout spec, so the written direction doesn't drift from the code
+
+🔖 **Suggested commit point** — dashboard composition pass complete: dense grid, ledger treatment, expandable charts.
+
+## Phase 2c — Dashboard richness (Tier A: real data, no new mock fields)
+
+> **Why this phase exists.** Before starting the orders page, audited what more the dashboard could meaningfully show — full reasoning and the deferred options (payment method, courier, region — all would need new mock-data fields) are in `plan.md`'s "Dashboard metrics" section. Scoped deliberately small: four additions, all pure aggregation over data already in `mock-orders.json`, chosen against the same "four KPI cards, nothing else competing" discipline from the Phase 2b research rather than building everything researched.
+
+- [x] 21.9. Add `StatusBreakdownPoint`/`TopProduct` types (`lib/types/analytics.ts`); add `averageOrderValue` to `AnalyticsSummary`
+- [x] 21.10. Add `getOrderStatusBreakdown()` and `getTopProducts(limit)` to `lib/api/analytics.ts`; extend `getSummaryStats()` with `averageOrderValue` (revenue ÷ revenue-generating orders, not ÷ all orders — document why in the code comment)
+- [x] 21.11. Add `ORDER_STATUS_COLOR_VAR` to `components/orders/order-status.tsx` — raw CSS-var mapping mirroring the existing `ORDER_STATUS_STYLES` Tailwind-class mapping, one source of truth for status→color; Recharts `Cell` needs a raw value, not a class
+- [x] 21.12. Build `OrderStatusBreakdown` (donut + legend, reusing the status palette) + matching skeleton
+- [x] 21.13. Build `TopProducts` (ranked list, not a chart) + matching skeleton
+- [x] 21.14. Wire both into `app/page.tsx` as a new insights row (5/12 + 7/12) between the charts row and the recent-orders/activity row, each its own `Suspense`/`SectionBoundary` pair; resize `SummaryCards`' KPI strip to 5 tiles (hero `lg:col-span-4` + four compacts `lg:col-span-2`; mobile `grid-cols-4`, hero full row + compacts filling the row beneath — no orphaned cell, applied correctly from the start this time); update `app/loading.tsx` to match, in the same step
+
+🔖 **Suggested commit point** — dashboard richness pass complete: status breakdown, top products, AOV, cancellation rate.
 
 ## Phase 3 — Orders Page: Data + Filters
 
@@ -113,6 +156,7 @@ Each step is a single, reviewable unit of work. Check it off after reviewing, th
 - [ ] 47. Evaluate lazy-loading (`next/dynamic`) for any heavy, non-critical client component; apply only where it gives a real benefit, skip otherwise
 - [ ] 48. Audit `package.json` for unused/unnecessary dependencies; remove anything not actually in use
 - [ ] 49. Record memoization, lazy-loading, and dependency decisions in the decision log
+- [ ] 49b. **Revisit the per-section Suspense architecture** (decided at step 14, deliberately kept for now): check whether sections popping in at different times reads as janky once real skeletons exist, and whether the streaming win still holds with uniform ~500ms delays. Restructure only if there's a real problem — see `learn.md`'s "Step 14, revised" entry for the full reasoning and the rejected alternatives (`Promise.all`, `Promise.allSettled`)
 
 🔖 **Suggested commit point** — performance pass complete, decisions documented.
 

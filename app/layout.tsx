@@ -30,7 +30,11 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body className="min-h-full flex flex-col">
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <AppHeader />
-          <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6">{children}</main>
+          {/* max-w-7xl (was 6xl) — on a real wide monitor the tighter cap
+              left a lot of unused side margin, which made the whole page
+              read smaller than it needed to (see the density recalibration
+              note in learn.md). */}
+          <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6">{children}</main>
         </ThemeProvider>
       </body>
     </html>

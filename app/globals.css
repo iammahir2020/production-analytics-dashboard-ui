@@ -26,6 +26,7 @@
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
+  --color-grid-line: var(--grid-line);
   --color-destructive: var(--destructive);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
@@ -77,6 +78,11 @@
   --destructive: #a6432e;
   --destructive-foreground: #fdf4f7;
   --border: #e6decf;
+  /* Lighter than --border on purpose — --border marks a panel's edge,
+     --grid-line marks a rule *inside* one (ledger row dividers, chart
+     gridlines). Added in the Phase 2b density pass once panels actually
+     had distinct shapes for an edge to bound; see step.md 21.5. */
+  --grid-line: rgba(36, 29, 22, 0.06);
   --input: #eee7d6;
   --ring: #a22a52;
   --chart-1: #a22a52;
@@ -113,6 +119,7 @@
   --destructive: #d97a62;
   --destructive-foreground: #1a0a10;
   --border: rgba(243, 236, 223, 0.1);
+  --grid-line: rgba(243, 236, 223, 0.06);
   --input: #14100c;
   --ring: #e0567f;
   --chart-1: #e0567f;

@@ -69,6 +69,18 @@ async function mockFetch<T>(data: T, opts?: { delayMs?: number; failRate?: numbe
 }
 ```
 
+## Dashboard metrics — richness without clutter
+
+Before building the orders page, audited what else the dashboard could meaningfully show beyond the original four KPIs + two charts + two lists. The bar for "meaningful" was set by research done before the Phase 2b density pass: the best dashboards succeed through metric discipline (Stripe: "four KPI cards above the fold and nothing else competing"), and AI-generated dashboards tend toward clutter, not sparseness — so this was scoped as a few well-chosen real additions, not maximalism.
+
+**Added (zero new mock data — pure aggregation over fields that already exist):**
+- **Order status breakdown** — a donut reusing the existing 5-color status palette; status was previously only visible per-row in the ledger, never aggregated
+- **Top products by revenue** — a ranked list (not a chart; five items read faster as a list) aggregating `order.items[]`, which was fetched but never aggregated anywhere
+- **Average order value** — a 5th KPI tile; computed as revenue ÷ *revenue-generating* orders, not ÷ all orders (dividing by all 200 would understate it, since ~55 generated zero revenue)
+- **Cancellation + refund rate** — derived from the same status breakdown data, no extra fetch; a real health metric (27.5% in the current dataset)
+
+**Deliberately not built now (documented, not discarded):** a further tier exists — payment method (COD/bKash/Nagad), courier/fulfillment breakdown, and orders-by-region — all thematically grounded in this project's own confirmed design direction (`.interface-design/system.md` already names COD and courier partners as the world this dashboard lives in) but each needs a new field added to the mock dataset first. Held back deliberately to keep this pass additive and low-risk; revisit only if there's real time/reason to.
+
 ## Architecture: Server vs Client Components
 
 This is one of the seven things they explicitly want explained, so decide it deliberately, not by default.
@@ -84,7 +96,9 @@ This is one of the seven things they explicitly want explained, so decide it del
 - Anything using `useState`, `useEffect`, `onClick`, etc.
 
 **The pattern to state clearly in your README:**
-> The dashboard page is a Server Component that fetches initial data and passes it down as props. Interactive pieces — the orders table, filters, charts — are Client Components that own their own state. This keeps the initial page load fast and server-rendered, while interactivity is scoped to only where it's needed rather than marking the whole page client-side.
+> The dashboard page is a Server Component shell that fetches nothing itself. Each section is an async Server Component behind its own `Suspense` boundary, fetching its own data — sections stream in independently as they resolve, each gets its own skeleton, and one slow or failing data source degrades that section alone instead of blanking the page. Interactive pieces — the orders table, filters, charts — are Client Components that own their own state, receiving already-fetched data as props. This keeps the page server-rendered and resilient, while interactivity is scoped to only where it's needed rather than marking the whole page client-side.
+
+**Why not one page-level `Promise.all`** (the first implementation, revised during step 14): parallel-fetching everything at the page level is fast, but it's all-or-nothing — a single failed call takes down the entire dashboard. `Promise.allSettled` would allow partial rendering, but it doesn't answer *what to render where a section failed*; a silently missing revenue figure reads as zero revenue rather than a failure, so you'd need per-section error UI regardless. Per-section Suspense boundaries give the failure isolation *and* independent loading states *and* streaming, for roughly the same amount of code. Sections are drawn around data dependencies, not visual boxes — both charts read one `getRevenueTimeseries()` call, so they share a boundary instead of duplicating the fetch.
 
 ## State management for filters — your strongest architectural decision
 

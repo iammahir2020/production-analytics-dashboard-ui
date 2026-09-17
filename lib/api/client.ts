@@ -16,8 +16,14 @@ const DEFAULT_DELAY_MS = 500;
 // step.md's verification phase).
 const DEFAULT_FAIL_RATE = 0;
 
+// Generation random delays between 1 and 2000 ms to simulate
+// actual network delays
+function generateRandomDelay(): number {
+  return Math.floor(Math.random() * 2000) + 1;
+}
+
 export async function mockFetch<T>(data: T, opts: MockFetchOptions = {}): Promise<T> {
-  const delayMs = opts.delayMs ?? DEFAULT_DELAY_MS;
+  const delayMs = opts.delayMs ?? generateRandomDelay();
   const failRate = opts.failRate ?? DEFAULT_FAIL_RATE;
 
   await new Promise((resolve) => setTimeout(resolve, delayMs));
