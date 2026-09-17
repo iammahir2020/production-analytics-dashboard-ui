@@ -5,6 +5,14 @@ export type OrderStatus =
   | "cancelled"
   | "refunded";
 
+// The single source of truth for "every status, in order" — needed
+// wherever code has to enumerate all of them (a status breakdown chart, a
+// filter <Select>, validating a URL param) rather than just narrow one
+// value. Was duplicated locally in two places (lib/api/analytics.ts,
+// app/orders/page.tsx) before a third real need (the orders filter)
+// crossed the point where that stopped making sense.
+export const ORDER_STATUSES: OrderStatus[] = ["pending", "processing", "completed", "cancelled", "refunded"];
+
 export interface OrderItem {
   productName: string;
   quantity: number;
@@ -20,6 +28,13 @@ export interface Order {
   total: number;
   createdAt: string;
 }
+
+// The one list of allowed "rows per page" choices — used both to populate
+// the orders page's page-size <Select> and to validate an incoming
+// `pageSize` URL param server-side, so the UI options and the validation
+// can't drift apart into two separately-maintained lists.
+export const ORDER_PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
+export type OrderPageSize = (typeof ORDER_PAGE_SIZE_OPTIONS)[number];
 
 export interface OrderFilters {
   search?: string;

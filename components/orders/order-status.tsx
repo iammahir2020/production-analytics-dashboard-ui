@@ -3,27 +3,25 @@ import { cn } from "@/lib/utils";
 
 interface StatusStyle {
   label: string;
-  border: string;
   dot: string;
   text: string;
 }
 
-// Ledger-stamp treatment, not a pill badge: a colored left-border bar on
-// the row + a small dot + colored text — no background fill, no rounded
-// badge shape (see .interface-design/system.md). Colors reuse existing
-// semantic tokens (no new hues invented): pending→warning, processing→
-// the brand accent ("in motion"), completed→success, cancelled→neutral
-// (not alarming — a cancellation isn't a failure), refunded→danger.
-//
-// Full class strings are written out per status rather than assembled
-// from a color name at runtime — Tailwind's build-time scanner only
-// detects literal class names in source, not interpolated ones.
+// Ledger-stamp treatment, not a pill badge: a colored dot + colored text
+// (the left-border color bar this used to also carry moved to
+// StickyLedgerCell's box-shadow — a real border on a sticky cell doesn't
+// reliably repaint at its scrolled position, see that file) — no
+// background fill, no rounded badge shape (see .interface-design/
+// system.md). Colors reuse existing semantic tokens (no new hues
+// invented): pending→warning, processing→the brand accent ("in motion"),
+// completed→success, cancelled→neutral (not alarming — a cancellation
+// isn't a failure), refunded→danger.
 export const ORDER_STATUS_STYLES: Record<OrderStatus, StatusStyle> = {
-  pending: { label: "Pending", border: "border-l-chart-3", dot: "bg-chart-3", text: "text-chart-3" },
-  processing: { label: "Processing", border: "border-l-primary", dot: "bg-primary", text: "text-primary" },
-  completed: { label: "Completed", border: "border-l-chart-2", dot: "bg-chart-2", text: "text-chart-2" },
-  cancelled: { label: "Cancelled", border: "border-l-chart-4", dot: "bg-chart-4", text: "text-chart-4" },
-  refunded: { label: "Refunded", border: "border-l-destructive", dot: "bg-destructive", text: "text-destructive" },
+  pending: { label: "Pending", dot: "bg-chart-3", text: "text-chart-3" },
+  processing: { label: "Processing", dot: "bg-primary", text: "text-primary" },
+  completed: { label: "Completed", dot: "bg-chart-2", text: "text-chart-2" },
+  cancelled: { label: "Cancelled", dot: "bg-chart-4", text: "text-chart-4" },
+  refunded: { label: "Refunded", dot: "bg-destructive", text: "text-destructive" },
 };
 
 // Same mapping as ORDER_STATUS_STYLES, as raw CSS custom-property values

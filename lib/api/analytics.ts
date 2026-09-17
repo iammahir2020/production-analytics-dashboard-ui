@@ -1,20 +1,13 @@
 import { eachDayOfInterval, endOfDay, format, startOfDay, subDays } from "date-fns";
 import ordersData from "@/lib/data/mock-orders.json";
 import analyticsData from "@/lib/data/mock-analytics.json";
-import type { Order, OrderStatus } from "@/lib/types/order";
+import { ORDER_STATUSES, type Order } from "@/lib/types/order";
 import type { AnalyticsSummary, PeriodDelta, RevenuePoint, StatusBreakdownPoint, TopProduct } from "@/lib/types/analytics";
 import { getActiveCustomerCount } from "./customers";
 import { mockFetch } from "./client";
 
 const TREND_WINDOW_DAYS = 30;
 const TOP_PRODUCTS_LIMIT = 5;
-
-// Enumerated explicitly rather than derived from data, so a status with
-// zero current orders still appears in the breakdown at count 0 instead
-// of silently vanishing. Kept in sync with the OrderStatus union by hand —
-// same tradeoff NEGATIVE_ORDER_STATUSES/SPENT_STATUSES already make
-// elsewhere rather than importing across the data/UI boundary.
-const ALL_STATUSES: OrderStatus[] = ["pending", "processing", "completed", "cancelled", "refunded"];
 
 const orders = ordersData as Order[];
 
@@ -124,9 +117,9 @@ export async function getRevenueTimeseries(): Promise<RevenuePoint[]> {
   return mockFetch(bucketByDay(start, end));
 }
 
-// All 5 statuses always present (even at count 0) — see ALL_STATUSES.
+// All 5 statuses always present (even at count 0) — see ORDER_STATUSES.
 export async function getOrderStatusBreakdown(): Promise<StatusBreakdownPoint[]> {
-  const breakdown = ALL_STATUSES.map((status) => ({
+  const breakdown = ORDER_STATUSES.map((status) => ({
     status,
     count: orders.filter((order) => order.status === status).length,
   }));

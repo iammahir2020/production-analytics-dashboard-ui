@@ -1,32 +1,23 @@
 import { getOrders } from "@/lib/api/orders";
-import { formatCurrency, formatShortDate } from "@/lib/format";
-import type { Order } from "@/lib/types/order";
+import { formatShortDate, formatSignedCurrency } from "@/lib/format";
 import { SectionHeading } from "@/components/shared/section-heading";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { NEGATIVE_ORDER_STATUSES, OrderStatusIndicator, ORDER_STATUS_STYLES } from "@/components/orders/order-status";
+import { NEGATIVE_ORDER_STATUSES, OrderStatusIndicator } from "@/components/orders/order-status";
+import { StickyLedgerCell } from "@/components/orders/sticky-ledger-cell";
 import { cn } from "@/lib/utils";
 
 const RECENT_LIMIT = 8;
 
-function netTotal(orders: Order[]): number {
-  return orders.reduce((sum, order) => sum + (NEGATIVE_ORDER_STATUSES.has(order.status) ? -order.total : order.total), 0);
-}
-
-function signedAmount(amount: number, negative: boolean): string {
-  return negative ? `(${formatCurrency(Math.abs(amount))})` : formatCurrency(amount);
-}
-
 // A real ledger table — date / particulars / status / amount — rather than
-// three items floating in a flex row. The 3px status-colored stamp moves
-// to the date cell's left border (a <tr> can't carry its own left border
-// cleanly under border-collapse). Cancelled/refunded render in red ink
-// with parenthesised amounts — real double-entry-bookkeeping convention,
-// and it makes status legible from the amount column alone.
+// three items floating in a flex row. The date column is the sticky
+// leading cell (StickyLedgerCell, shared with the orders page's table) and
+// carries the 3px status-colored stamp as part of that. Cancelled/refunded
+// render in red ink with parenthesised amounts — real double-entry-
+// bookkeeping convention, and it makes status legible from the amount
+// column alone.
 export async function RecentOrdersList() {
   const { orders } = await getOrders({ pageSize: RECENT_LIMIT });
-  const net = netTotal(orders);
-  const netNegative = net < 0;
 
   return (
     <section className="flex flex-col gap-3">
@@ -37,7 +28,7 @@ export async function RecentOrdersList() {
             <caption className="sr-only">Recent orders, most recent first</caption>
             <thead>
               <tr className="text-left text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
-                <th className="px-4 pt-4 pb-2 font-semibold">Date</th>
+                <StickyLedgerCell as="th" sticky="left">Date</StickyLedgerCell>
                 <th className="px-4 pt-4 pb-2 font-semibold">Particulars</th>
                 <th className="px-4 pt-4 pb-2 font-semibold">Status</th>
                 <th className="px-4 pt-4 pb-2 text-right font-semibold">Amount</th>
@@ -48,14 +39,13 @@ export async function RecentOrdersList() {
                 const negative = NEGATIVE_ORDER_STATUSES.has(order.status);
                 return (
                   <tr key={order.id} className="border-b border-grid-line last:border-b-0">
-                    <td
-                      className={cn(
-                        "border-l-[3px] px-4 py-2.5 font-mono text-[13px] whitespace-nowrap text-muted-foreground",
-                        ORDER_STATUS_STYLES[order.status].border
-                      )}
+                    <StickyLedgerCell
+                      sticky="left"
+                      status={order.status}
+                      className="font-mono text-[13px] whitespace-nowrap text-muted-foreground"
                     >
                       {formatShortDate(order.createdAt)}
-                    </td>
+                    </StickyLedgerCell>
                     <td className="px-4 py-2.5">
                       <span className="font-mono text-[13px] text-muted-foreground">{order.id}</span>{" "}
                       <span className="font-medium">{order.customerName}</span>
@@ -69,33 +59,12 @@ export async function RecentOrdersList() {
                         negative && "text-destructive"
                       )}
                     >
-                      {signedAmount(order.total, negative)}
+                      {formatSignedCurrency(order.total, negative)}
                     </td>
                   </tr>
                 );
               })}
             </tbody>
-            <tfoot>
-              <tr>
-                {/* border-double: a real double-ruled ledger total, not
-                    decoration — border-style: double naturally renders as
-                    two parallel hairlines given enough border-width. */}
-                <td
-                  colSpan={3}
-                  className="border-t-[3px] border-double border-t-border px-4 pt-2.5 pb-4 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase"
-                >
-                  Net · {orders.length} shown
-                </td>
-                <td
-                  className={cn(
-                    "border-t-[3px] border-double border-t-border px-4 pt-2.5 pb-4 text-right font-semibold tabular-nums",
-                    netNegative && "text-destructive"
-                  )}
-                >
-                  {signedAmount(net, netNegative)}
-                </td>
-              </tr>
-            </tfoot>
           </table>
         </div>
       </Card>

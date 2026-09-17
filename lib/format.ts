@@ -21,6 +21,14 @@ export function formatCurrency(amount: number): string {
   return `৳${formatted}`;
 }
 
+// Real double-entry-bookkeeping convention: a negative amount in
+// parentheses, not a minus sign. First used in the dashboard's recent-
+// orders ledger, now the main orders table too — the second real call
+// site is what made this worth lifting out of that one file.
+export function formatSignedCurrency(amount: number, negative: boolean): string {
+  return negative ? `(${formatCurrency(Math.abs(amount))})` : formatCurrency(amount);
+}
+
 export function formatPercent(value: number, decimals = 1): string {
   return new Intl.NumberFormat("en-US", {
     style: "percent",

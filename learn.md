@@ -1328,3 +1328,305 @@ rm -rf .next; rm -f /tmp/dashboard-scale.html /tmp/dashboard-scale.log
 ```
 
 **How this moves the build forward:** no architectural or data changes — purely a visual recalibration prompted by seeing the real thing on a real screen, which is exactly the kind of gap `tsc`/`lint`/`build` alone can never catch and this project has repeatedly needed a live look to find. Nothing in `step.md` needed a new checkbox for this — it's a refinement within the already-completed Phase 2b/2c scope, not new planned work. Phase 3 is still next.
+
+## Step 22 — Build the orders page shell (Server Component, searchParams)
+
+**What was done:** `app/orders/page.tsx` — an async Server Component reading `searchParams`, parsing them into the existing `OrderFilters` type, and calling `getOrders(filters)` server-side. Renders the result plainly (semantic markup, no styling) — the same precedent Step 14 set for the dashboard shell, where later steps swap plain rendering for designed components. `FiltersBar`, the real `OrdersTable`, and `Pagination` are steps 23–27; this step only has to prove the URL → filtered fetch path genuinely works.
+
+**Why this page is a single Server Component, not a shell with per-section Suspense like the dashboard.** The dashboard needed multiple independent boundaries because it has four genuinely separate data dependencies that can succeed or fail on their own. The orders page has exactly one — the filtered order list — so per the project's own "sections follow data dependencies" rule, one dependency gets one boundary: `app/orders/loading.tsx`/`error.tsx` (steps 28–29) will cover it at the route level, the same role `app/loading.tsx`/`error.tsx` already play for the dashboard shell. `export const dynamic = "force-dynamic"` for the same reason as the dashboard — `getOrders()` goes through the simulated `mockFetch` delay, and a searchParams-driven route can't be meaningfully static-prerendered regardless.
+
+**The one real validation decision.** `status` is checked against the closed `OrderStatus` enum before being handed to `getOrders()` — an arbitrary or mistyped query string falls back to `"all"` rather than silently producing a filter that matches zero orders. Date params (`from`/`to`) are passed through unvalidated on purpose: step 23's date picker doesn't exist yet, so there's no real source of malformed values to guard against, and validating a problem that can't currently occur would be exactly the "code that looks meaningful but isn't doing real work" the project's standing rule warns against.
+
+**A real, if minor, TypeScript gap worth remembering.** `tsc --noEmit` run standalone right after creating the file failed with `Type '"/orders"' does not satisfy the constraint '"/"'` — Next only regenerates its ambient route types (`.next/types/routes.d.ts`, which is what makes `PageProps<'/orders'>` resolve) during an actual `dev`/`build` run, not on a bare `tsc` invocation. Running `npm run build` once (which regenerates those types as a side effect) resolved it, and the route correctly showed as `ƒ /orders` (Dynamic) in the build output. Worth remembering for any future new route: build once before trusting a standalone `tsc` failure about a brand-new route's prop types.
+
+**Verification.** `tsc`, `lint` (same one pre-existing unrelated warning), and `build` all clean, `/orders` confirmed `ƒ` Dynamic. Production server run, four real requests against real query strings — not just "the page returns 200":
+- `/orders` → "Showing 1–10 of 200 orders", first order `ord_0166`
+- `/orders?status=pending` → "Showing 1–10 of **19** orders" (all 10 visible rows genuinely `pending`) — the 19 matches the pending count independently verified back in Phase 2c, confirming the filter is real, not decorative
+- `/orders?page=2` → "Showing 11–20 of 200 orders", first order `ord_0040` — a genuinely different row than page 1's `ord_0166`, confirming pagination changes the actual data, not just the displayed range text
+- `/orders?status=bogus` → identical to the unfiltered default (same count, same first order) — confirms the fallback-to-`"all"` validation works exactly as intended, rather than either crashing or silently matching nothing
+
+**Commands run:**
+```
+mkdir -p app/orders
+
+rm -rf .next && npm run build   # first attempt: standalone tsc had failed on PageProps<'/orders'>
+# → build itself succeeded, regenerating .next/types; Route (app): ƒ /orders (Dynamic)
+
+npx tsc --noEmit    # now clean, route types present
+npm run lint        # 1 pre-existing warning (lib/api/client.ts, unrelated), 0 errors
+
+npm run start > /tmp/orders-page.log 2>&1 &
+curl -s http://localhost:3000/orders -o /tmp/orders-default.html -w "HTTP %{http_code}\n"              # → 200
+curl -s "http://localhost:3000/orders?status=pending" -o /tmp/orders-pending.html -w "HTTP %{http_code}\n"  # → 200
+curl -s "http://localhost:3000/orders?page=2" -o /tmp/orders-page2.html -w "HTTP %{http_code}\n"        # → 200
+curl -s "http://localhost:3000/orders?status=bogus" -o /tmp/orders-bogus.html -w "HTTP %{http_code}\n"  # → 200
+cat /tmp/orders-page.log   # clean, no errors
+
+python3 -c "... extract the raw 'Showing N-N of N' text + first order id per response ..."
+# → default: 1-10 of 200, ord_0166
+# → pending: 1-10 of 19, ord_0130 (10/10 visible rows are 'pending')
+# → page=2:  11-20 of 200, ord_0040 (different row than page 1)
+# → bogus:   1-10 of 200, ord_0166 (identical to default — fallback confirmed)
+
+pkill -9 -f "next-server"
+rm -rf .next; rm -f /tmp/orders-*.html /tmp/orders-page.log
+```
+
+**How this moves the build forward:** the orders page's entire data path — URL to filters to fetch to rendered rows — is proven correct end to end before any of the interactive UI exists to drive it. Steps 23–27 are now purely component work (`FiltersBar`, `OrdersTable`, `OrderRow`, `Pagination`) wiring into a foundation that's already been tested against real query strings, not something to figure out alongside the new components.
+
+## Steps 23–30 — Finish Phase 3: FiltersBar, OrdersTable, Pagination, loading/error, EmptyState
+
+**What was done, by piece:**
+
+- **`hooks/use-debounced-value.ts`** — a generic `useDebouncedValue<T>(value, delayMs)`. Debounces the *value*, not the event handler, so the input stays fully responsive to every keystroke; only the returned value lags behind.
+- **`hooks/use-order-filters.ts`** — `useOrderFiltersUrl()`, the single owner of reading/writing the orders page's URL filter state (`q`/`status`/`from`/`to`). Two real call sites from the start: `FiltersBar` (the inputs) and `OrdersTable`'s empty state (the "Clear filters" button) — built as a shared hook because both needed it, not spec­ulatively. Uses `router.replace` (not `push`, so a filter tweak doesn't add a browser-history entry the back button has to walk through) with `scroll: false` (so a filter change doesn't jump the page to the top).
+- **`components/orders/filters-bar.tsx`** — search input (debounced), status `Select`, two native `<input type="date">` for the range, a "Clear" button shown only when a filter is active. **Native date inputs, not a calendar/Popover picker** — a real dependency-vs-simplicity tradeoff: shadcn's date-range UI needs `react-day-picker` on top of Popover+Calendar, and two native date inputs are zero new dependencies, keyboard-operable, and use the OS's own picker on mobile (arguably better UX there, not just simpler). Consistent with the project's standing "no dependency without a real reason" rule.
+- **`components/shared/pagination.tsx`** — deliberately reusable beyond orders: reads/writes only the `page` param via its own `usePathname()`, no dependency on `useOrderFiltersUrl`. Renders "Page X of Y" + Prev/Next rather than numbered page buttons — with up to 20 pages (200 orders ÷ 10/page), numbered buttons would need ellipsis handling for little real benefit over knowing where you are and moving one step. Returns `null` when there's only one page, so a filtered-down result set doesn't show dead pagination controls.
+- **`components/shared/empty-state.tsx`** — generic on purpose (`components/shared/`, not `components/orders/`): takes a plain `onAction` callback rather than reaching into any filter hook itself, so `OrdersTable`'s empty state isn't the only thing this component can ever be used for.
+- **`components/orders/order-row.tsx`** — `OrderRow`, wrapped in `React.memo` per the step. Reuses the ledger's exact date/status-stamp/amount conventions from Phase 2b (`ORDER_STATUS_STYLES`, `NEGATIVE_ORDER_STATUSES`, red-ink parenthesised negatives) — that component's own comments already promised this would carry into the Phase 3 table. No callback prop yet (row → `/orders/[id]` linking is Phase 4's step 34), so no `useCallback` was added speculatively; the memo comment says explicitly what it's waiting to pair with.
+- **`components/orders/orders-table.tsx`** — `OrdersTable`, rendering `OrderRow`s or `EmptyState` when `orders.length === 0`. Order id and customer get **separate** columns here, unlike the dashboard ledger's combined "particulars" column — a deliberate difference, not an inconsistency: this is the primary data-browsing surface, not a compact widget, so a dedicated customer column has real scanning value it didn't have on the dashboard.
+- **`app/orders/loading.tsx` / `error.tsx`** — mirror the dashboard's route-level files exactly (same reasoning: this route has no per-section boundaries to fall back to first, since it's one Server Component with one data dependency). `FiltersBarSkeleton`/`OrdersTableSkeleton` exported alongside their real components, same convention as every other skeleton in this codebase, even though — unlike the dashboard — nothing here uses them as a Suspense fallback; keeping the pattern uniform mattered more than the small file-organization "cost" of an unused-elsewhere export.
+- **Two consolidations made mid-step, not after:** `ORDER_STATUSES` (all 5 statuses as an array) was duplicated locally in `lib/api/analytics.ts` and the old step-22 shell — a third real need (validating the filter's `status` param, and populating the `Select`'s options) crossed the point where that stopped making sense, so it's now one export from `lib/types/order.ts`, imported everywhere. Same for `formatSignedCurrency` (parenthesised negative amounts) — was a private function in `recent-orders-list.tsx`; `OrderRow` needing the identical logic was the second real call site, so it moved to `lib/format.ts`.
+
+**Two real bugs found by actually running the server, not by `tsc`/`lint`/`build`:**
+
+1. **`react-hooks/set-state-in-effect` on the search-input resync.** The first version of `FiltersBar` used a `useEffect(() => setSearchText(filters.q), [filters.q])` to resync the input when the URL's `q` changed for a reason other than the component's own debounced push (Clear filters, browser back/forward). ESLint's `set-state-in-effect` rule caught this as the same class of anti-pattern that hit `hooks/use-mounted.ts` earlier in this project — calling a React state setter synchronously inside an effect body, rather than deriving/adjusting it during render. Fixed with React's own documented pattern for "reset state when a prop changes": a `prevUrlSearch` value compared and updated **during render**, not in an effect. The debounced-push effect (`useEffect(() => setFilter(...), [debouncedSearch])`) stayed as an effect correctly — `router.replace` is a genuine external-system side effect, which effects exist for; only the plain React `setState` call was the actual anti-pattern.
+2. **`SelectValue` rendered the raw value, not the label.** After wiring the status filter, curl'd the page and found the trigger showing literal `all`/`pending` instead of "All statuses"/"Pending". Checked Base UI's `Select.Value` type directly rather than guessing: it renders the raw value by default and needs an explicit `children` function (`(value) => label`) to map it — its own documented API, just not the assumption I'd made. Fixed by passing that mapping function, using the same `STATUS_OPTIONS` array the dropdown's own items are built from, so the trigger and the options can't drift out of sync with each other.
+
+**Verification.** `tsc`, `lint` (same one pre-existing unrelated warning), and `build` all clean; `/orders` still `ƒ` Dynamic. Production server run against six real query-string combinations, every count independently recomputed against `mock-orders.json` directly (not trusted from the UI):
+- `/orders` → "Page 1 of 20" (200 ÷ 10)
+- `?status=pending` → "Page 1 of 2" (19 pending — matches the count independently verified back in Phase 2c), 10 real `Pending` rows on the page plus the filter dropdown's own "Pending" option (11 total matches, correctly accounted for, not a duplicate row)
+- `?q=Imran` → "Page 1 of 2" (20 matches, independently recomputed against `id`/`customerName`)
+- `?from=2026-09-01&to=2026-09-15` → "Page 1 of 4" (31 matches, independently recomputed)
+- `?page=2` → "Page 2 of 20"
+- `?q=zzzznomatch` → the real `EmptyState` (title, description, "Clear filters" button all present) and **zero** pagination controls rendered (confirms the `totalPages <= 1` guard)
+
+Also confirmed after the `SelectValue` fix: default trigger reads "All statuses", `?status=pending` reads "Pending" — both via the actual rendered `data-slot="select-value"` span, not the CSS class string that looks similar and caused a wasted first check.
+
+**Commands run:**
+```
+echo "n" | npx shadcn@latest add select input -y   # both added clean, no overwrite conflicts
+
+# select.tsx: same ring-1 ring-foreground/10 + shadow-md drift as
+# card.tsx/chart.tsx/dialog.tsx before it — fixed at the source (4th time
+# this exact pattern has shown up in a shadcn primitive)
+
+find node_modules/@base-ui/react/select -iname "*.d.ts" -path "*root*"
+# → confirmed value/onValueChange are plain strings for single-select
+#   (multiple defaults to false), unlike ToggleGroup's array quirk
+
+npx tsc --noEmit
+# → error: Select's onValueChange value can be `string | null`
+# → fixed: setFilter("status", value ?? "all")
+
+npm run lint
+# → error: react-hooks/set-state-in-effect on the resync effect
+# → fixed: adjust state during render instead (see bug #1 above)
+npx tsc --noEmit && npm run lint   # both clean
+
+rm -rf .next && npm run build   # succeeded, /orders still ƒ Dynamic
+
+npm run start > /tmp/orders3-server.log 2>&1 &
+curl -s http://localhost:3000/orders -o /tmp/o3-default.html -w "HTTP %{http_code}\n"
+curl -s "http://localhost:3000/orders?status=pending" -o /tmp/o3-pending.html -w "HTTP %{http_code}\n"
+curl -s "http://localhost:3000/orders?q=Imran" -o /tmp/o3-search.html -w "HTTP %{http_code}\n"
+curl -s "http://localhost:3000/orders?from=2026-09-01&to=2026-09-15" -o /tmp/o3-daterange.html -w "HTTP %{http_code}\n"
+curl -s "http://localhost:3000/orders?q=zzzznomatch" -o /tmp/o3-empty.html -w "HTTP %{http_code}\n"
+curl -s "http://localhost:3000/orders?page=2" -o /tmp/o3-page2.html -w "HTTP %{http_code}\n"
+# → all HTTP 200, log clean, no errors
+
+node -e "... independently recompute pending/Imran/date-range counts directly from mock-orders.json ..."
+# → pending: 19, Imran matches: 20, date range: 31 — all three matched
+#   the rendered "Page X of Y" text exactly
+
+python3 -c "... extract 'Page X of Y' text (split across RSC text nodes) per response ..."
+grep -o "No orders match your filters" /tmp/o3-empty.html   # present
+grep -o "Clear filters" /tmp/o3-empty.html                  # present
+grep -c "Page.\{0,10\}of" /tmp/o3-empty.html                # → 0, Pagination correctly hidden
+
+# SelectValue bug found + fixed, then re-verified on a fresh rebuild:
+python3 -c "... locate the real data-slot=\"select-value\" span (not the CSS class string) ..."
+# → default: "All statuses", ?status=pending: "Pending" — both correct
+
+pkill -9 -f "next-server"
+rm -rf .next; rm -f /tmp/o3*.html /tmp/orders3*.log
+```
+
+**How this moves the build forward:** Phase 3 is complete — the orders page has real filtering, real pagination, and real loading/error/empty states, all verified against actual query strings and independently recomputed counts, not just "it builds." Phase 4 (order details) is next: `OrderRow`'s `React.memo` is already sitting ready for the `useCallback`-paired click handler that step 34 will add, and the ledger column conventions it reuses will carry forward again into the order details view.
+
+## Post-Phase-3 fix — "the filter feels clunky and slow" + show the full date
+
+**The report.** The user asked for the table to show the date (a date-range filter already existed, but the date column read as easy to miss) and separately flagged filter interactions as "clunky and slow."
+
+**The real cause of "clunky," found by re-reading the page's own structure, not by guessing at CSS.** `app/orders/page.tsx` was a single async Server Component: `FiltersBar` sat inside the same component that awaited `getOrders()`. With no Suspense boundary narrower than the whole route, `app/orders/loading.tsx`'s fallback was the only fallback available for *every* client-side searchParams navigation — including a debounced search push, a status pick, or a pagination click. That fallback replaces the entire page tree. So every filter interaction unmounted the real, focused input the user was typing into, flashed a skeleton over the whole page, then remounted a fresh `FiltersBar` once the fetch resolved. That's a structural bug, not a tuning issue — no debounce delay or loading-spinner tweak would have fixed it, since the actual controls were being torn down and rebuilt underneath the user's cursor.
+
+**The fix — narrow the Suspense boundary to the actual data dependency.** New `components/orders/orders-results.tsx` (`OrdersResults` + `OrdersResultsSkeleton`) holds the `getOrders()` fetch, `OrdersTable`, and `Pagination` — the three things that actually depend on the fetched data. `app/orders/page.tsx` is now a thin shell: `FiltersBar` renders outside the `<Suspense>` boundary and stays permanently mounted; only `OrdersResults` suspends. This is the same "sections follow data dependencies" principle already used for the dashboard and Phase 2c — the earlier "single Server Component, no internal Suspense" decision for this page wasn't wrong about *how many* data dependencies exist (still just one, the order list), it was wrong about *what counts as depending on it* — `FiltersBar` doesn't, and got caught in the blast radius anyway because nothing separated it. `error.tsx` needed no change: an error thrown inside `OrdersResults` still propagates to the nearest route-level error boundary regardless of the Suspense boundary sitting between them. `loading.tsx` also needed no change — it still correctly covers the *first* navigation into `/orders`, before `FiltersBar` exists to protect.
+
+**A second, real factor named but deliberately not touched.** `lib/api/client.ts`'s `mockFetch` now uses a random 1–2000ms delay (an external change from earlier in this session, not something built here) instead of a fixed 500ms. Even with the remount bug fixed, this means a filter interaction can still take up to two real seconds before the table updates. Flagged clearly to the user rather than silently changed — it's an external edit, and the standing rule on those is to note them, not revert them without asking.
+
+**The date fix.** `OrderRow`'s date cell switched from `formatShortDate` ("Sep 15", no year — the dashboard ledger's convention, built for a "recent 8" snippet where the year is never in question) to `formatDate` ("Sep 15, 2026"), and dropped `text-muted-foreground` — now that the table has a real date-range filter tied to it, the date is something users scan and filter by, not just secondary metadata the way it was treated as a compact dashboard widget. `OrdersTableSkeleton`'s date placeholder width bumped from `w-12` to `w-24` to match, so the skeleton doesn't visibly narrow-then-widen once real content streams in.
+
+**Verification.** `tsc`, `lint` (same one pre-existing unrelated warning), and `build` all clean; `/orders` still `ƒ` Dynamic. Production server run confirmed: full dates with year render on all 10 visible rows (`Sep 12, 2026`, `Sep 13, 2026`, `Sep 15, 2026`, …), `FiltersBar` still renders correctly, and a filtered request (`?status=pending`) still resolves correctly through the new nested-Suspense path ("Page 1 of 2", matching the already-verified 19-pending count). **One honest limitation, same category as before:** `curl` performs a fresh full page load every time, so it cannot observe a client-side navigation's remount behavior directly — I can confirm the *structure* is now correct (the Suspense boundary is scoped to exactly the data-dependent part, which is what drives the fix), but not eyeball the before/after "does the input visibly flicker" behavior itself without a real browser.
+
+**Commands run:**
+```
+npx tsc --noEmit && npm run lint   # clean (same 1 pre-existing warning)
+rm -rf .next && npm run build      # succeeded, /orders still ƒ Dynamic
+
+npm run start > /tmp/orders-fix.log 2>&1 &
+curl -s http://localhost:3000/orders -o /tmp/orders-fix.html -w "HTTP %{http_code}\n"   # → 200
+grep -oE "Sep [0-9]+, 2026" /tmp/orders-fix.html | sort -u   # → Sep 12/13/15, 2026 present
+python3 -c "... count full-date matches ..."                 # → 10, matches 10 visible rows
+grep -o "Search order id or customer" /tmp/orders-fix.html   # → FiltersBar still renders
+
+curl -s "http://localhost:3000/orders?status=pending" -o /tmp/orders-fix-pending.html -w "HTTP %{http_code}\n"
+# → 200, "Page 1 of 2" (still correct), FiltersBar still present
+
+pkill -9 -f "next-server"
+rm -rf .next; rm -f /tmp/orders-fix*.html /tmp/orders-fix.log
+```
+
+**How this moves the build forward:** the orders page now has the correct Suspense granularity — interactive, data-independent UI stays mounted; only what genuinely depends on the fetch suspends. Worth remembering for Phase 4 and beyond: "how many data dependencies does this page have" isn't the only question — "what UI must never be part of the blast radius when that dependency refetches" is a second, separate question, and this page's first answer missed it.
+
+## Orders table — order id first column, sticky on horizontal scroll
+
+**What was done.** Reordered `OrdersTable`'s columns from Date/Order/Customer/Status/Amount to **Order/Date/Customer/Status/Amount**, and made the Order id column `sticky left-0` so it stays visible while the table scrolls horizontally on narrow viewports (`overflow-x-auto` was already there from Phase 3; nothing was sticky within it before). The status-color stamp (the 3px `border-l`) moved with the id column, since the ledger convention was always "the leftmost edge carries the stamp" — now that Order id is leftmost, the stamp follows it, which also means the status color itself stays visible through a horizontal scroll, not just the id. No breakpoint gating: sticky positioning is a no-op wherever the container isn't actually scrolling (desktop, where the table already fits), so applying it unconditionally is simpler than a responsive on/off switch and has no visible cost where it doesn't apply.
+
+**A real bug caught before it shipped, not after — the same tailwind-merge conflict as the Phase 2b ledger bug, recognized on sight this time.** The sticky column needs an opaque background (`bg-card`, so scrolling content behind it doesn't show through) and a right-edge border marking where the frozen column ends. The first draft used the all-sides `border-border` utility for that right edge, sitting in the same class string as the status's directional `border-l-{color}` override. That's exactly the conflict already found and fixed once in the dashboard ledger (Phase 2b, step 18) — `tailwind-merge` treats an all-sides `border-{color}` utility as conflicting with a directional one and drops it *entirely*, not just the shared side, leaving the other sides with no real color at all. Caught this from the standing rule already written into `step.md` after the first occurrence, rather than re-discovering it from a rendered bug report — fixed with `border-r-border` (side-specific) instead of `border-border`, verified directly in the compiled CSS that both `border-right-color: var(--border)` and the status's `border-left-color` survive together in the same class list.
+
+**Verification.** `tsc`, `lint` (same one pre-existing unrelated warning), and `build` all clean. Production server run: header order confirmed `["Order", "Date", "Customer", "Status", "Amount"]`; `sticky left-0 z-10` present on both the header cell and every row's leading cell; `.border-r-border{border-right-color:var(--border)}` and all three `.border-l-chart-N{border-left-color:...}` rules confirmed compiled and both present together on real rows (not one dropping the other); order ids and full dates (`Sep 12, 2026`, etc.) still rendering correctly after the reorder — the column shuffle didn't disturb the underlying data. Same disclosed limitation as always: `curl` can confirm the CSS and markup are structurally correct, not that the sticky behavior visually holds together while actually scrolling — that needs a real viewport.
+
+**Commands run:**
+```
+npx tsc --noEmit && npm run lint   # clean (same 1 pre-existing warning)
+rm -rf .next && npm run build      # succeeded
+
+npm run start > /tmp/orders-sticky.log 2>&1 &
+curl -s http://localhost:3000/orders -o /tmp/orders-sticky.html -w "HTTP %{http_code}\n"   # → 200
+
+python3 -c "... extract <thead> header text in document order ..."
+# → ['Order', 'Date', 'Customer', 'Status', 'Amount']
+grep -o 'sticky left-0 z-10[^"]*' /tmp/orders-sticky.html | head -3
+# → present on the header th and multiple row tds, each with its own
+#   border-l-chart-N status color alongside border-r-border — both survive
+
+grep -o '\.border-r-border{[^}]*}' .next/static/chunks/*.css
+# → .border-r-border{border-right-color:var(--border)}
+grep -o '\.border-l-chart-[0-9]{[^}]*}' .next/static/chunks/*.css | sort -u
+# → chart-2/3/4 all present, each with their own border-left-color
+
+grep -oE "ord_[0-9]{4}" /tmp/orders-sticky.html | sort -u | head -5   # ids intact
+grep -oE "Sep [0-9]+, 2026" /tmp/orders-sticky.html | sort -u        # dates intact
+
+pkill -9 -f "next-server"
+rm -rf .next; rm -f /tmp/orders-sticky.html /tmp/orders-sticky.log
+```
+
+**How this moves the build forward:** the `border-{color}` vs `border-{side}-{color}` conflict is now a written standing rule (`step.md`), not just a comment living in one file that has to be remembered — this is the second time it's come up and the first time it was caught before shipping rather than after. Worth checking for on sight in any future row/cell styling that combines a directional accent with any other bordered edge.
+
+## Shared sticky ledger cell — fix the accent, extend to the dashboard's table too
+
+**The report.** Two things: the sticky column's status-color bar wasn't reliably visible across different scroll positions (screenshots showed it rendering fully in one and barely at all in another), and a request to apply the same sticky-leading-column treatment to `RecentOrdersList` on the dashboard — as one shared component, not two separate implementations.
+
+**The real cause of the flaky color bar — a genuine, documented browser behavior, not a missing class.** `position: sticky` cells inside a `border-collapse: collapse` table have a real quirk (worst in Chrome): a `border` on the sticky cell doesn't reliably repaint at its current scrolled position, because collapsed borders are technically painted by the table as a whole, not the individual cell, and that painting doesn't always keep up with a cell being repositioned by `sticky`. This wasn't guessable from the code alone — the two screenshots showing inconsistent results *between scroll positions on the same table* were the actual signal pointing at a scroll-position-dependent rendering bug rather than a plain styling mistake.
+
+**The fix — `box-shadow` instead of `border` for the accent.** A `box-shadow` isn't part of the CSS border model at all and isn't affected by `border-collapse`, so it stays correctly attached to the sticky cell regardless of scroll position. New `components/orders/sticky-ledger-cell.tsx` (`StickyLedgerCell`) renders the accent as one combined declaration — `inset 3px 0 0 0 {status color}, inset -1px 0 0 0 var(--border)` — the status stripe and the frozen-column's right-edge separator in a single `box-shadow`, using the existing `ORDER_STATUS_COLOR_VAR` map (already built for the status donut's `Cell fill` in Phase 2c, so this is its second real use, not a new color mapping).
+
+**The shared component, used by both tables with real per-use differences.** `StickyLedgerCell` takes `as` (`"td" | "th"`), an optional `status` (headers have none), and `className` for whatever typography each table's leading column needs — it owns only the truly identical mechanics (sticky positioning, z-index, opaque background, the box-shadow accent), not an attempt to unify the two tables' entire structure. `OrderRow` (orders page) uses it for the order-id cell; `RecentOrdersList` (dashboard) uses it for the date cell — different content, same component, exactly the "conditional for each use case" the user asked for. The two tables' actual column *sets* stay different on purpose (order id/customer as separate columns on the primary browsing surface vs. a combined "particulars" column on the compact dashboard widget) — that was a deliberate Phase 3 decision with its own stated reasoning, and unifying the accent mechanic doesn't require unifying that too.
+
+**A real cleanup that fell out of this.** `ORDER_STATUS_STYLES`'s `border` field (`"border-l-chart-3"` etc.) became fully dead once both of its only two call sites switched to the shared component's box-shadow — removed from the type and the object rather than left as unused dead code.
+
+**Verification.** `tsc`, `lint` (same one pre-existing unrelated warning), and `build` all clean. Production server run against both pages: confirmed the combined `box-shadow` (`inset 3px 0 0 0 var(--chart-N), inset -1px 0 0 0 var(--border)`) renders correctly on both the dashboard ledger and the orders table, with every distinct status color present on each (`--chart-2`, `--chart-3` on the orders page only since a "pending" order wasn't in the dashboard's 8-row sample, `--chart-4`, `--destructive`) — confirming `ORDER_STATUS_COLOR_VAR`'s mapping carried over correctly with no color drift from the old Tailwind-class version. Confirmed the sticky header cell's box-shadow (`inset -1px 0 0 0 var(--border)`, no status stripe since headers aren't row-specific) on both tables too. Data untouched: revenue figure and order ids still correct after the refactor.
+
+**Commands run:**
+```
+npx tsc --noEmit && npm run lint   # clean (same 1 pre-existing warning)
+rm -rf .next && npm run build      # succeeded
+
+npm run start > /tmp/sticky-shared.log 2>&1 &
+curl -s http://localhost:3000/ -o /tmp/sticky-dashboard.html -w "HTTP %{http_code}\n"       # → 200
+curl -s http://localhost:3000/orders -o /tmp/sticky-orders.html -w "HTTP %{http_code}\n"    # → 200
+
+python3 -c "... locate sticky left-0 header cells in both responses ..."
+# → both show style="box-shadow:inset -1px 0 0 0 var(--border)" on the header
+
+python3 -c "... locate body-row boxShadow declarations ..."
+# → both show "inset 3px 0 0 0 var(--chart-N), inset -1px 0 0 0 var(--border)"
+
+grep -oE "inset 3px 0 0 0 var\(--[a-z0-9-]+\)" /tmp/sticky-dashboard.html | sort -u
+  # → chart-2, chart-4, destructive (this 8-row sample had no pending order)
+grep -oE "inset 3px 0 0 0 var\(--[a-z0-9-]+\)" /tmp/sticky-orders.html | sort -u
+  # → chart-2, chart-3, chart-4, destructive — all four non-primary statuses present
+
+grep -o "৳45,59,700.00" /tmp/sticky-dashboard.html            # revenue figure intact
+grep -oE "ord_[0-9]{4}" /tmp/sticky-orders.html | sort -u     # order ids intact
+
+pkill -9 -f "next-server"
+rm -rf .next; rm -f /tmp/sticky-*.html /tmp/sticky-shared.log
+```
+
+**How this moves the build forward:** the sticky+border-collapse quirk (and its box-shadow workaround) is a real CSS lesson worth remembering for any future table in this app, not just these two — and the shared `StickyLedgerCell` means the next ledger-style table (if one comes up) has a component to reach for instead of a third copy of the same mechanics.
+
+## Removed the "Net · N shown" footer from the dashboard's recent-orders table
+
+Small, requested removal: the double-ruled `<tfoot>` total row is gone from `RecentOrdersList`. Removed alongside it: the `netTotal()` helper and the `net`/`netNegative` variables that only existed to feed that row, and the now-unused `Order` type import that only `netTotal`'s signature needed — rather than leaving dead code behind. `NEGATIVE_ORDER_STATUSES` and `formatSignedCurrency` both stay imported; per-row red-ink amounts (cancelled/refunded) are unaffected, only the summary row is gone. `RecentOrdersListSkeleton` already had no footer placeholder, so no skeleton change was needed to keep the two in sync.
+
+**Verification.** `tsc`/`lint`/`build` all clean (same one pre-existing unrelated warning). Production server confirmed `Net ·` and `<tfoot` both return zero matches in the rendered page, while real order ids and the dashboard's revenue figure are still present and correct — the removal didn't disturb anything else in the table.
+
+## Orders table: rows-per-page control + capped, internally-scrolling table
+
+**What was asked.** A 10/20/50 rows-per-page dropdown for the orders table, and a height cap so a large page size doesn't grow the page indefinitely — the table should scroll within itself instead.
+
+**Page size, wired the same way every other orders filter is — through the URL.** `ORDER_PAGE_SIZE_OPTIONS = [10, 20, 50] as const` in `lib/types/order.ts` is the one source of truth for the offered choices, used both to populate the `<Select>` and to validate an incoming `pageSize` URL param server-side — the same pattern `ORDER_STATUSES` already established, so a hand-edited URL can't request some arbitrary page size the UI never offered (falls back to the default 10, verified: `?pageSize=999` produced identical output to no param at all). Picking a new size resets `page` to 1, for the same reason changing any other filter does — staying on page 5 of a 10-per-page view after switching to 50-per-page could land past the end of the new, shorter page count.
+
+**Where the control lives, and why it didn't need the same Suspense-boundary treatment as the search box.** The size selector was added to the existing `Pagination` component rather than pulled out into its own always-mounted piece next to `FiltersBar`. That's a real, deliberate call, not an oversight: the "clunky" bug fixed a session ago was specifically about a *focused, actively-typed-into* input losing its characters and cursor mid-keystroke when the whole results area suspended. A `<Select>` closes the instant an option is picked, and Prev/Next are single clicks — neither has an "in-progress" state to lose the way a debounced search box does, so `Pagination` (rows selector included) staying inside `OrdersResults`'s Suspense boundary is an acceptable, understood tradeoff rather than a repeat of the earlier mistake. `Pagination` itself stays self-contained and genuinely reusable — `pageSizeOptions` is an optional prop, so a future caller that only needs page navigation (no size choice) isn't forced to opt out of anything.
+
+**The scroll cap needed a real design decision: freeze the header row too, not just cap the height.** A plain `max-h-[65vh] overflow-auto` alone would let up to 50 rows scroll past the column headers, losing track of which column is which. `StickyLedgerCell` (built two sessions ago for the horizontal-scroll leading column) was redesigned around a `sticky: "left" | "top" | "corner"` prop instead of always assuming "left": `"top"` freezes a header cell vertically, `"left"` freezes the leading column horizontally (its original job, now explicit rather than implicit), and `"corner"` — the one cell that's both the leading column's header *and* row 1 — does both at once with a higher z-index (20 vs. 10) so it stays above whichever of the other two sticky layers scrolls underneath it. The `sticky` prop is required, not defaulted: three meaningfully different roles with no sensible universal default, so every call site has to say which one it actually needs. `RecentOrdersList` (dashboard) only needed its existing usages updated to `sticky="left"` to keep compiling — its 8-row table never needed the header freeze or height cap, so that table's behavior is otherwise completely unchanged.
+
+**The header/corner box-shadow follows the same rule discovered for the leading column** (a `border` on a `position: sticky` cell inside a `border-collapse` table doesn't reliably repaint at its scrolled position) — extended to the vertical axis: `sticky="top"` cells get `inset 0 -1px 0 0 var(--border)` (a bottom separator, box-shadow not border, same reasoning), and the corner combines both insets in one declaration. Verified directly in the rendered output, not assumed: the corner header's box-shadow is `inset -1px 0 0 0 var(--border), inset 0 -1px 0 0 var(--border)` (both edges), the other four headers show only the bottom inset, and a body row's leading cell still shows its original `inset 3px 0 0 0 var(--chart-N), inset -1px 0 0 0 var(--border)` unchanged.
+
+**The skeleton got more accurate, not just consistent.** `OrdersTableSkeleton` now takes a `rowCount` prop instead of a hardcoded 8 — the requested page size is already known from the URL before the fetch resolves (`parseFilters` runs synchronously), so `app/orders/page.tsx` threads it straight into the `Suspense` fallback. A 50-row real result no longer jumps in height against an 8-row skeleton that preceded it.
+
+**Verification — every claim checked against real requests, not assumed from the code.** `tsc`, `lint` (same one pre-existing unrelated warning), `build` all clean. Production server run against six real query-string combinations:
+- Default, `?pageSize=20`, `?pageSize=50` → 10/20/50 unique order ids actually present on each page (counted, not inferred from the param), with "Page 1 of 20/10/4" matching `200 ÷ pageSize` exactly
+- `?pageSize=999` (invalid) → identical output to the default (10 rows, "Page 1 of 20") — the validation fallback confirmed, not just present in the code
+- `?status=pending&pageSize=50` (a filtered result smaller than the page size) → the rows-per-page selector still renders and correctly shows "50," while "Page X of Y"/Prev/Next correctly don't render at all (single page) — confirms the control doesn't disappear just because the current result happens to be small
+- The Select's displayed value matched the URL in every case (`10`/`20`/`50`/`50`) — checked against the actual second `data-slot="select-value"` element in each response (the first is the status filter's), not assumed from position
+- `max-h-[65vh] overflow-auto` present on the scroll container; a body row's sticky-left box-shadow unchanged and still correct on the 50-row page
+
+**One disclosed limitation, same category as before.** `curl` always returns the fully-streamed response (Next's swap script replaces the Suspense fallback before the connection closes), so the *skeleton's* row count during an actual in-flight request can't be directly observed this way — confirmed the logic is correct (the prop threading, the type check) but not eyeballed against a real loading frame. Same gap disclosed for every other skeleton/streaming claim this session.
+
+**Commands run:**
+```
+npx tsc --noEmit
+# → error: Select's onValueChange value can be string | null (same pattern
+#   as the earlier status Select fix)
+# → fixed: onValueChange={(value) => value && changePageSize(value)}
+npx tsc --noEmit && npm run lint   # both clean (1 pre-existing warning)
+rm -rf .next && npm run build      # succeeded
+
+npm run start > /tmp/orders-pgsize.log 2>&1 &
+curl -s http://localhost:3000/orders -o /tmp/o-default.html -w "HTTP %{http_code}\n"
+curl -s "http://localhost:3000/orders?pageSize=20" -o /tmp/o-20.html -w "HTTP %{http_code}\n"
+curl -s "http://localhost:3000/orders?pageSize=50" -o /tmp/o-50.html -w "HTTP %{http_code}\n"
+curl -s "http://localhost:3000/orders?pageSize=999" -o /tmp/o-invalid.html -w "HTTP %{http_code}\n"
+curl -s "http://localhost:3000/orders?status=pending&pageSize=50" -o /tmp/o-edge.html -w "HTTP %{http_code}\n"
+# → all HTTP 200, log clean
+
+python3 -c "... count unique ord_#### ids + extract 'Page X of Y' per response ..."
+# → 10/20/50/10 rows respectively; "Page 1 of 20/10/4/20" — all exact
+
+python3 -c "... locate the SECOND select-value element (first is status) ..."
+# → 10 / 20 / 50 / 50 — matches each request's pageSize exactly
+
+grep -o "max-h-\[65vh\] overflow-auto" /tmp/o-50.html            # present
+python3 -c "... extract all box-shadow declarations inside <thead> ..."
+# → corner: both insets; other 4 headers: bottom inset only
+python3 -c "... extract first tbody box-shadow ..."
+# → inset 3px 0 0 0 var(--chart-2), inset -1px 0 0 0 var(--border) — unchanged
+
+pkill -9 -f "next-server"
+rm -rf .next; rm -f /tmp/o-*.html /tmp/orders-pgsize.log
+```
+
+**How this moves the build forward:** the sticky-cell abstraction now correctly models "which edge(s) does this cell freeze against" as its own explicit concept rather than assuming "leading column" was the only kind of sticky cell that would ever exist — worth remembering if a future table needs the same pattern. The rows-per-page control and the Suspense-boundary tradeoff reasoning (discrete click vs. continuous typing) are both documented here and in the code, not just shipped silently.

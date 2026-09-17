@@ -25,6 +25,10 @@ Each step is a single, reviewable unit of work. Check it off after reviewing, th
 - **A page-wide layout value (container max-width, etc.) may exist in more than one independent place.** `app/layout.tsx`'s `<main>` and `components/shared/app-header.tsx`'s header row each hard-coded their own `max-w-*` — changing one without checking for the other would have misaligned the header against the page content. Grep for a value before assuming one edit covers it
 - **Current type/density baseline for any new component (build against this, not Phase 2b's original tighter scale):** page container `max-w-7xl`; section headings 13px via the shared `<SectionHeading>` (`components/shared/section-heading.tsx`) — extract into it rather than re-typing the literal className a 6th time; body/list text 14–15px; card padding 16px (Card's own default — don't reach for `size="sm"` reflexively); chart/donut heights around 160px. Recalibrated from the original Phase 2b numbers, which were correct for fixing flatness but ended up calibrated against Linear's all-day power-user density rather than this app's actual "glanced at, not lived in" audience
 - **A Recharts tooltip that needs more than the raw `dataKey`/`value`** (a real label, a matching color, anything from the underlying domain object) **reads it off `item.payload` in a custom `formatter`**, not off `name`/`value` alone — `name` is often just the raw data key. See `StatusDonut`'s tooltip for the pattern
+- **"How many data dependencies does this page have" isn't the only Suspense-boundary question — "what UI must never be in the blast radius when that dependency refetches" is a second, separate one.** A page can have exactly one data dependency and still need a boundary narrower than the whole route, if something on it (a filter bar, any always-interactive control) doesn't itself depend on that fetch. Without that narrower boundary, the nearest `loading.tsx` fallback replaces the *entire* page on every refetch — unmounting and remounting live, focused inputs on every interaction. Found in `/orders`: fixed by splitting the data-dependent part into its own component (`OrdersResults`) under its own `<Suspense>`, with `FiltersBar` rendered outside it
+- **A Base UI form primitive doesn't necessarily do the obvious thing by default — check its actual type, don't assume.** `SelectValue` renders the raw selected value, not the matching option's label, unless given an explicit `children` mapping function. Same category as `ToggleGroup`'s array-valued single-select from earlier — read the type (`find node_modules/@base-ui/react/<component> -iname "*.d.ts"`) before trusting an assumption carried over from a different library's API shape
+- **Never combine an all-sides `border-{color}` utility with a directional one (`border-l-{color}`, `border-r-{color}`) on the same element — always use directional color utilities for every side that needs one, even the "default" sides.** `tailwind-merge` treats the all-sides utility as conflicting with the directional one and drops it entirely (not just the shared side) when the two appear together, silently leaving the non-overridden sides with no real color at all. Confirmed as a real shipped bug once already (the Phase 2b ledger) and caught again before shipping in the orders table's sticky column — worth checking for on sight now, not re-diagnosing from scratch each time it recurs
+- **A `border` on a `position: sticky` cell inside a `border-collapse` table doesn't reliably repaint at its current scrolled position (worst in Chrome) — use `box-shadow` for any accent/edge on a sticky table cell instead.** `box-shadow` isn't part of the border model and isn't affected by `border-collapse` at all. Two insets can combine in one declaration (`inset 3px 0 0 0 {color}, inset -1px 0 0 0 var(--border)`) for a status stripe + edge separator together. See `components/orders/sticky-ledger-cell.tsx`, the shared component both ledger tables use for their sticky leading column
 
 ## Phase 0 — Project Setup
 
@@ -108,15 +112,15 @@ Each step is a single, reviewable unit of work. Check it off after reviewing, th
 
 ## Phase 3 — Orders Page: Data + Filters
 
-- [ ] 22. Build `app/orders/page.tsx` Server Component shell reading `searchParams`, doing the initial filtered fetch server-side
-- [ ] 23. Build `FiltersBar` (Client Component): debounced search input, status `Select`, date-range picker
-- [ ] 24. Wire `FiltersBar` to the URL via `useSearchParams`/`useRouter` (native, no library)
-- [ ] 25. Build `OrdersTable` (Client Component) rendering rows from props
-- [ ] 26. Build `OrderRow` wrapped in `React.memo`
-- [ ] 27. Build reusable `Pagination` component, URL-driven `page` param
-- [ ] 28. Add `app/orders/loading.tsx` — table skeleton
-- [ ] 29. Add `app/orders/error.tsx` — error boundary with retry
-- [ ] 30. Build `EmptyState` ("No orders match your filters" + Clear filters CTA) and wire into `OrdersTable`
+- [x] 22. Build `app/orders/page.tsx` Server Component shell reading `searchParams`, doing the initial filtered fetch server-side
+- [x] 23. Build `FiltersBar` (Client Component): debounced search input, status `Select`, date-range picker
+- [x] 24. Wire `FiltersBar` to the URL via `useSearchParams`/`useRouter` (native, no library)
+- [x] 25. Build `OrdersTable` (Client Component) rendering rows from props
+- [x] 26. Build `OrderRow` wrapped in `React.memo`
+- [x] 27. Build reusable `Pagination` component, URL-driven `page` param
+- [x] 28. Add `app/orders/loading.tsx` — table skeleton
+- [x] 29. Add `app/orders/error.tsx` — error boundary with retry
+- [x] 30. Build `EmptyState` ("No orders match your filters" + Clear filters CTA) and wire into `OrdersTable`
 
 🔖 **Suggested commit point** — orders page is functional: table, URL-synced filters, pagination, empty/loading/error states.
 
