@@ -196,16 +196,16 @@ Each step is a single, reviewable unit of work. Check it off after reviewing, th
 
 ## Phase 9 — README
 
-- [ ] 51. Write `README.md`: setup, architecture/folder structure, API/data-fetching approach, Server vs Client Component explanation, performance decisions, testing approach, key implementation notes (decision log), AI-assisted development section
+- [x] 51. Write `README.md`: setup, architecture/folder structure, API/data-fetching approach, Server vs Client Component explanation, performance decisions, testing approach, key implementation notes (decision log), AI-assisted development section — kept deliberately short/scannable per the user's request, not a condensed copy of `learn.md`
 
 🔖 **Suggested commit point** — README complete.
 
 ## Phase 10 — Verification & Deployment
 
-- [ ] 52. Run `npm run build`, `npm run lint`, `npm test`, `tsc --noEmit`; fix anything surfaced
-- [ ] 53. Confirm the production build is minified — Next.js's SWC compiler minifies JS and Tailwind purges/minifies CSS automatically; spot-check the build output for this rather than adding manual tooling
-- [ ] 54. Run a Lighthouse audit (Performance, Accessibility, Best Practices, SEO) against the production build; address anything significant it surfaces
-- [ ] 55. Manual end-to-end pass: dashboard load, filters + URL sync, pagination, order details, empty state, forced error+retry (temporarily raise fail rate), responsive check
+- [x] 52. Run `npm run build`, `npm run lint`, `npm test`, `tsc --noEmit`; fix anything surfaced — all clean (build, tsc, 29/29 tests; one pre-existing unrelated lint warning in `lib/api/client.ts`, from the user's own edit)
+- [x] 53. Confirm the production build is minified — spot-checked a real JS chunk (single-letter identifiers, no whitespace, 21 lines for 156KB) and the CSS (2 lines, 60KB total, purged — not the multi-MB unpurged Tailwind default)
+- [x] 54. Run a Lighthouse audit (Performance, Accessibility, Best Practices, SEO) against the production build; address anything significant it surfaces — run twice (once early at the user's request, once formally alongside 52/53). Desktop: 100/100/100/100 on all 3 routes, both runs. Mobile-throttled dashboard sits ~79–80, traced to Recharts' rendering cost — a known tradeoff, not a bug; nothing else surfaced worth fixing. Numbers recorded in README.md
+- [x] 55. Manual end-to-end pass: dashboard load, filters + URL sync, pagination, order details, empty state, forced error+retry (temporarily raise fail rate), responsive check — all 7 confirmed via real Playwright interaction against the production build, see learn.md
 
 🔖 **Suggested commit point** — final verification pass complete; this is the commit that goes to GitHub.
 

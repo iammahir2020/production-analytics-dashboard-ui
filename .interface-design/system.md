@@ -137,4 +137,4 @@ a 3px border.
 
 ## Naming
 
-"Khata" (খাতা — ledger/account book) was used as the specimen's working name. Not yet adopted anywhere in the actual codebase/package.json — open question for the user, not decided.
+**Decided (18 Sep 2026): "Khata".** Adopted throughout — `package.json`'s `name`, `app/layout.tsx`'s metadata title, the visible wordmark next to the header icon (`components/shared/app-header.tsx`), and the README's title. The specimen's working name became the real one, rather than the build shipping under a generic "Production Analytics Dashboard" title that had nothing to do with the visual direction actually built.

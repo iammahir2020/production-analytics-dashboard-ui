@@ -12,8 +12,20 @@ const hankenGrotesk = Hanken_Grotesk({
 });
 
 export const metadata: Metadata = {
-  title: "Production Analytics Dashboard",
-  description: "Analytics dashboard for a Bangladesh e-commerce business",
+  title: "Khata",
+  description: "Khata — a production analytics dashboard for a Bangladesh e-commerce business",
+  // Two variants of the same mark (public/icon-{light,dark}.svg), picked by
+  // the OS/browser's own color-scheme preference via the `media` field —
+  // a favicon is loaded by browser chrome, outside the page's DOM/CSS
+  // entirely, so it can't read the app's live theme-toggle state the way
+  // the in-page header icon does; prefers-color-scheme is the equivalent
+  // browser-chrome-level signal, and is what a favicon can actually see.
+  icons: {
+    icon: [
+      { url: "/icon-light.svg", media: "(prefers-color-scheme: light)" },
+      { url: "/icon-dark.svg", media: "(prefers-color-scheme: dark)" },
+    ],
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
