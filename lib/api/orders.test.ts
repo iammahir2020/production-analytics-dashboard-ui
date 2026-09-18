@@ -110,6 +110,13 @@ describe("getOrders", () => {
     expect(page).toBe(1);
     expect(orders).toHaveLength(5);
   });
+
+  it("clamps a page beyond the real page count to the last real page, instead of returning zero rows", async () => {
+    const result = await getOrders({ pageSize: 2, page: 999 });
+    expect(result.page).toBe(3); // ceil(5 / 2) — the real last page
+    expect(result.total).toBe(5); // the filters still matched everything
+    expect(result.orders.map((o) => o.id)).toEqual(["ord_a"]); // same rows page 3 would return directly
+  });
 });
 
 describe("getOrderById", () => {

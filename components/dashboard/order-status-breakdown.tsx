@@ -1,15 +1,23 @@
 import { ChartPie } from "lucide-react";
+import dynamic from "next/dynamic";
 import { getOrderStatusBreakdown } from "@/lib/api/analytics";
 import { formatPercent } from "@/lib/format";
 import { NEGATIVE_ORDER_STATUSES, ORDER_STATUS_STYLES } from "@/components/orders/order-status";
 import { EmptyState } from "@/components/shared/empty-state";
 import { SectionHeading } from "@/components/shared/section-heading";
-import { StatusDonut } from "@/components/dashboard/status-donut";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 const LEGEND_ROW_COUNT = 5;
+
+// Same Recharts code-splitting reasoning as charts-section.tsx — see that
+// file's comment. loading matches the real donut's own size (size-40,
+// same value OrderStatusBreakdownSkeleton already uses).
+const StatusDonut = dynamic(
+  () => import("@/components/dashboard/status-donut").then((mod) => mod.StatusDonut),
+  { loading: () => <Skeleton className="size-40 shrink-0 rounded-full" /> }
+);
 
 // Status was previously only visible per-row in the ledger, never
 // aggregated — this is the donut + legend view of the same 5-color

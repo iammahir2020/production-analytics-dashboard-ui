@@ -42,8 +42,18 @@ export async function getOrders(filters: OrderFilters = {}): Promise<PaginatedOr
   );
 
   const total = sorted.length;
-  const page = Math.max(1, filters.page ?? 1);
   const pageSize = filters.pageSize && filters.pageSize > 0 ? filters.pageSize : DEFAULT_PAGE_SIZE;
+  // Clamped against the real page count, not just floored at 1 — an
+  // out-of-range page (a stale bookmark, a hand-edited URL, or simply the
+  // last page of a wider filter that just got narrower) would otherwise
+  // slice past the end and return zero rows. OrdersTable then reports
+  // that as "no orders match your filters," which is true of the slice
+  // and false of the filters — the exact empty-vs-wrong-page confusion
+  // step 50.2 already ruled out for empty-vs-error. Serving the nearest
+  // real page instead, and returning the page actually used (below), keeps
+  // both the data and the "Page X of Y" label honest.
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(Math.max(1, filters.page ?? 1), totalPages);
   const start = (page - 1) * pageSize;
   const paginatedOrders = sorted.slice(start, start + pageSize);
 

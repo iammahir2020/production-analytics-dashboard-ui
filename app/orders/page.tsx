@@ -16,7 +16,16 @@ export const dynamic = "force-dynamic";
 // against the closed OrderStatus enum, `pageSize` against the one closed
 // list of choices the UI actually offers (ORDER_PAGE_SIZE_OPTIONS, so a
 // hand-edited URL can't request an arbitrary huge page), and `from`/`to`
-// through the shared parseDateParam.
+// through the shared parseDateParam. `page` requires a whole number, not
+// just a finite one — `?page=1.5` used to pass a bare `Number.isFinite`
+// check and reach getOrders() as-is, where `(page - 1) * pageSize`
+// produced a fractional slice offset (a real, non-page-aligned 10-row
+// window straddling two pages). No UI control can ever produce a
+// fractional page, so this is the same "malformed → sane default"
+// treatment as an unknown status, not a new rule. An in-range integer
+// that's simply too high (`?page=999`) is deliberately let through here
+// — getOrders() is where the real page count is known, and that's where
+// it gets clamped instead of rejected.
 //
 // The date check was added later, in the task-PDF audit. The comment here
 // used to argue it was unnecessary because FiltersBar's
@@ -41,7 +50,7 @@ function parseFilters(searchParams: Record<string, string | string[] | undefined
     status: status && ORDER_STATUSES.includes(status as OrderStatus) ? (status as OrderStatus) : "all",
     dateFrom: sanitizeDateParam(get("from")),
     dateTo: sanitizeDateParam(get("to")),
-    page: Number.isFinite(page) && page > 0 ? page : undefined,
+    page: Number.isInteger(page) && page > 0 ? page : undefined,
     pageSize: (ORDER_PAGE_SIZE_OPTIONS as readonly number[]).includes(pageSize) ? pageSize : undefined,
   };
 }

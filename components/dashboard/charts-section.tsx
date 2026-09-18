@@ -1,11 +1,33 @@
 import { ChartSpline } from "lucide-react";
+import dynamic from "next/dynamic";
 import { getRevenueTimeseries } from "@/lib/api/analytics";
-import { OrdersChart } from "@/components/dashboard/orders-chart";
-import { RevenueChart } from "@/components/dashboard/revenue-chart";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ChartPanelHeader, ExpandableChart } from "@/components/shared/expandable-chart";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+
+// Recharts (both these components depend on it) measured at ~421KB — it was
+// landing in the shared chunk group, so /orders and /orders/[id] (no chart
+// on either route) downloaded and executed it too. next/dynamic code-splits
+// it into its own chunk, fetched only by a route that actually renders one
+// of these two components. Default ssr (true, not passed — this is a Server
+// Component, and ssr:false is only legal from a Client one) keeps the
+// initial HTML unchanged: the chart still server-renders on first load,
+// same as before. Measured: /orders 1324KB -> 670KB, / 1147KB -> 631KB
+// (first-load JS, uncompressed). loading matches the compact chart body's
+// own resting height (h-40, the same value ChartPanelSkeleton already
+// uses) — the taller "expanded" Dialog instance reuses the same already-
+// fetched chunk from the compact render on the same page, so its loading
+// state covers a case that in practice never fires, not the one this
+// fallback is actually sized for.
+const RevenueChart = dynamic(
+  () => import("@/components/dashboard/revenue-chart").then((mod) => mod.RevenueChart),
+  { loading: () => <Skeleton className="h-40 w-full" /> }
+);
+const OrdersChart = dynamic(
+  () => import("@/components/dashboard/orders-chart").then((mod) => mod.OrdersChart),
+  { loading: () => <Skeleton className="h-40 w-full" /> }
+);
 
 // Both charts read this same timeseries — one fetch, one Suspense
 // boundary, so a failure here fails both together rather than duplicating

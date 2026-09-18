@@ -2578,3 +2578,93 @@ rm -rf .playwright-mcp /tmp/khata-brand-crops /tmp/khata-icon-test
 ```
 
 **How this moves the build forward:** a real, hand-built brand asset replaces both the leftover Vercel favicon and the lucide placeholder — the exact "not something generic" the user asked for, verified working in both themes rather than shipped on the assumption that `currentColor` would obviously just work. The size-legibility finding (simplify before 64px, not after) is worth remembering as a general icon-design lesson beyond this one asset: test the smallest real use size before finalizing a detailed reference, not after.
+
+## Phase 11, step 58 — code-splitting Recharts off routes that never render it
+
+**What was done:** a post-deployment audit (run against a real `next start` production build, then re-confirmed against the live Vercel deployment, not a code read) found that `/orders` and `/orders/[id]` — neither of which renders a single chart — were shipping the same ~421KB Recharts chunk the dashboard needs, because Turbopack had hoisted it into the shared chunk group. Confirmed directly: grepped the chunk for `recharts` (108 hits) and orders-page strings (zero), and grepped each route's own HTML for the chunk's filename before touching anything.
+
+Fixed by wrapping the three components that actually import Recharts — `RevenueChart`, `OrdersChart` (`components/dashboard/charts-section.tsx`), `StatusDonut` (`components/dashboard/order-status-breakdown.tsx`) — in `next/dynamic`, mirroring the pattern `FiltersBar` already used for `DateRangeFilter`. One real difference from that precedent, checked against Next's own docs before writing anything: `ChartsSection`/`OrderStatusBreakdown` are Server Components (they `await` their own data), and `ssr: false` is not legal there — Next throws if you try. Left `ssr` unset (defaults to `true`), which is actually what's wanted here anyway: the dashboard's charts still need to appear in the initial server-rendered HTML, only the *routes that don't use them* should skip the chunk. `next/dynamic` code-splits regardless of the `ssr` value; `ssr: false` only controls whether the *using* route also renders it eagerly on the server, which was never the problem.
+
+Each `dynamic()` call gets a `loading:` fallback sized to the real component's resting dimensions — `h-40 w-full` for the two line/area charts (the same value `ChartPanelSkeleton` already uses), `size-40 shrink-0 rounded-full` for the donut (matching `OrderStatusBreakdownSkeleton`). Noted in a comment why the taller "expanded" Dialog instance of each chart doesn't get its own differently-sized fallback: `next/dynamic`'s `loading` option doesn't receive the wrapped component's per-instance props, and in practice this doesn't matter — the compact instance on the same page load has already triggered the chunk fetch by the time anyone opens the Dialog, so the expanded instance's `loading` state is a fallback for a race that doesn't happen in normal use.
+
+**Verification, not assumption** — rebuilt from scratch and re-measured, since the earlier audit's numbers came from a throwaway experiment that was reverted:
+- Route payload totals (uncompressed, summing every `<script>` an actual page load references): `/` 1147KB → **631KB**, `/orders` 1324KB → **670KB**, `/orders/[id]` similarly down. Matches the audit's earlier measurement exactly.
+- The ~330KB Recharts vendor chunk (found by grepping every chunk for `recharts` hit count, since the filename itself changes on every build) is present in `.next/static/chunks` but **not** referenced by name in any of the three routes' initial HTML — confirmed with a direct `grep -c <chunk-filename>` against each route's markup, all zero.
+- `/`'s HTML still contains real `recharts-surface`/`recharts-wrapper` DOM markers and zero "No data for this period" empty-state text — the charts are still server-rendering actual data, not silently falling back to a skeleton or an empty state.
+- `/orders`'s HTML has zero chart-related DOM markers (`recharts-surface`, `AreaChart`, `PieChart`) — nothing chart-shaped leaked onto a page that shouldn't have any.
+- `npx tsc --noEmit`, `npm run lint` (same one pre-existing `DEFAULT_DELAY_MS` warning, unrelated), `npm test` (29/29), `npm run build` all clean.
+
+**Commands run:**
+```
+npm run build   # clean, same route table as before
+
+npx next start -p 3199 &
+for u in / /orders /orders/ord_0023; do
+  # sum byte size of every /_next/static/chunks/*.js referenced in that route's HTML
+  curl -s "http://localhost:3199$u" | grep -oE '/_next/static/chunks/[^"]*\.js' | sort -u \
+    | while read p; do stat -c%s ".next${p#/_next}"; done | awk '{s+=$1} END {print s/1024, "KB"}'
+done
+# -> /: 631KB, /orders: 670KB, /orders/ord_0023: 676KB
+
+for f in .next/static/chunks/*.js; do
+  grep -c "AreaChart\|PieChart" "$f"   # locate the recharts chunk by content, not guessed filename
+done
+
+RC=.next/static/chunks/<found-chunk>.js
+for u in / /orders /orders/ord_0023; do
+  curl -s "http://localhost:3199$u" | grep -c "$(basename $RC)"   # 0 on all three: not statically declared
+done
+
+curl -s http://localhost:3199/ | grep -oE 'recharts-surface|recharts-wrapper' | sort | uniq -c   # 3 each, SSR intact
+curl -s http://localhost:3199/ | grep -c 'No data for this period'                                # 0, real data rendering
+curl -s http://localhost:3199/orders | grep -oE 'recharts-surface|AreaChart|PieChart'              # empty, nothing leaked
+
+npx tsc --noEmit && npm run lint && npm test   # all clean
+pkill -f "next start -p 3199"
+```
+
+**How this moves the build forward:** closes the highest-impact item from the post-deployment audit backlog (`step.md` Phase 11) with a measured, not theorized, result — the same discipline the rest of the build already holds itself to. Leaves the README performance section's `react-day-picker` number without its Recharts counterpart for now, on purpose: that's a doc update, not code, and belongs with whichever step actually revisits the README rather than being slipped in here.
+
+## Phase 11, step 59 — clamping out-of-range pages instead of slicing past the end
+
+**What was done:** the post-deployment audit found two related bugs in `/orders`'s page param, both confirmed live against a production build before touching any code. `?page=999` showed "No orders match your filters" (with a *Clear filters* button) sitting right next to "Page 999 of 20" — the filters matched all 200 orders; only the requested page was out of range, so `getOrders`' `slice(start, start + pageSize)` ran past the end of the sorted array and returned zero rows, which `OrdersTable` then reported as a filter mismatch rather than a page mismatch. Separately, `?page=1.5` passed the existing `Number.isFinite(page) && page > 0` check in `parseFilters` and reached `getOrders` as a literal fraction — `(1.5 - 1) * 10 = 5`, so `slice(5, 15)` returned a real 10-row window straddling pages 1 and 2, one no Prev/Next click could ever produce.
+
+Two separate, minimal fixes, one per sub-bug, kept apart because they're different kinds of invalid:
+- `app/orders/page.tsx`'s `parseFilters`: `Number.isFinite(page)` → `Number.isInteger(page)`. A fractional page has no valid meaning at all — no UI control (the Pagination component's Prev/Next, or a page-size change) ever produces one — so it gets the exact same treatment `status`/`from`/`to` already get for malformed input: dropped, falling back to the default (page 1), not coerced via `Math.floor` into a page number nobody asked for.
+- `lib/api/orders.ts`'s `getOrders`: a too-high-but-otherwise-valid integer (`?page=999`) is deliberately *not* rejected at the `parseFilters` boundary — the real page count only exists inside `getOrders`, once `total` and `pageSize` are both known. Restructured the existing `page`/`pageSize` computation so `pageSize` and `total` come first, then `totalPages = Math.max(1, Math.ceil(total / pageSize))`, then `page = Math.min(Math.max(1, filters.page ?? 1), totalPages)`. `getOrders` already returns the `page` it actually used (not the one it was asked for) — `OrdersResults` was already passing that straight to `Pagination`, so clamping here was enough on its own; `Pagination`'s "Page X of Y" label came out correct with no separate component change.
+
+Considered and deliberately skipped: a distinct "this page doesn't exist" empty state. Once the page is clamped, the table never actually renders empty for a filter set that has real results — the reported symptom (a false "no orders match your filters") simply stops happening, the same way `?status=bogus` silently falling back to "all" doesn't get its own explanatory banner either. Adding one would be a UI concept this app doesn't otherwise have, for a case the clamp already resolves.
+
+**Verification, against a rebuilt production server, not just the unit test:**
+- `?page=999` on the real 200-order dataset: "Page 20 of 20", real rows rendered, no empty-state text present (confirmed by both a positive check for the pagination label and a negative check for the empty-state string).
+- `?page=1.5`: "Page 1 of 20" — and the actual rendered rows (every `/orders/<id>` link, diffed) are byte-identical to a plain `?page=1` request, confirming the fallback lands on page 1 exactly, not some other interpretation of "1.5."
+- `?page=0` and `?page=-5`: still clamp to page 1 (the pre-existing `Math.max(1, …)` floor, unchanged).
+- `?pageSize=50&page=999`: clamps to "Page 4 of 4" — proves the clamp is computed against the real total for whichever `pageSize` is actually requested, not a number hardcoded against the default page size.
+- One caught-and-fixed false negative along the way: the first attempt at this verification ran against a `next start` server that had been left running from an earlier session, still serving the pre-fix `.next` build — confirmed by checking the process's start time against the wall clock, not assumed. Killed it and started a fresh one before trusting any of the above.
+- Added a `getOrders` unit test (`lib/api/orders.test.ts`) asserting the out-of-range clamp directly against the fixture dataset. `npx tsc --noEmit`, `npm run lint` (same one pre-existing unrelated warning), `npm test` (30/30 — 29 plus the new one), `npm run build` all clean.
+
+**Commands run:**
+```
+npx tsc --noEmit && npm run lint && npm test   # 30/30, clean
+
+npm run build
+ps aux | grep next-server   # caught a stale server from an earlier session
+kill -9 <stale-pid>
+nohup npx next start -p 3199 > server.log 2>&1 & disown   # fresh server, doesn't die with the shell
+
+python3 -c "
+import urllib.request, re
+def label(path):
+    h = urllib.request.urlopen(f'http://localhost:3199{path}').read().decode()
+    return re.findall(r'Page.{0,60}of.{0,30}', h)
+for p in ['1','2','3','20','0','-5']:
+    print(p, label(f'/orders?page={p}'))
+print(label('/orders?pageSize=50&page=999'))
+"
+# page=999 check (separate call): pagination label + 'No orders match your filters' presence + row count
+# page=1.5 vs page=1: diffed every /orders/<id> href, byte-identical
+
+pkill -f "next start -p 3199"
+```
+
+**How this moves the build forward:** closes the second item from the post-deployment audit backlog (`step.md` Phase 11) — the message an out-of-range page used to show wasn't just imprecise, it actively told the user their search terms were wrong when they weren't. The fix is a single clamp at the one place that already knows the real page count, not a new UI concept layered on top.

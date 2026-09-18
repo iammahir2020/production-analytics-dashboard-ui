@@ -151,9 +151,7 @@ export function OrderDetailsView({ order, customer, activity }: OrderDetailsView
                   {customer.active ? "Active" : "Inactive"}
                 </span>
               </div>
-              <a href={`mailto:${customer.email}`} className="text-sm text-muted-foreground hover:text-foreground">
-                {customer.email}
-              </a>
+              <p className="text-sm text-muted-foreground">{customer.email}</p>
               <dl className="grid grid-cols-2 gap-3 border-t border-grid-line pt-3 text-sm">
                 <div className="flex flex-col gap-0.5">
                   <dt className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
