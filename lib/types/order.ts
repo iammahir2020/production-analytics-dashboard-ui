@@ -10,8 +10,10 @@ export type OrderStatus =
 // filter <Select>, validating a URL param) rather than just narrow one
 // value. Was duplicated locally in two places (lib/api/analytics.ts,
 // app/orders/page.tsx) before a third real need (the orders filter)
-// crossed the point where that stopped making sense.
-export const ORDER_STATUSES: OrderStatus[] = ["pending", "processing", "completed", "cancelled", "refunded"];
+// crossed the point where that stopped making sense. `as const`, matching
+// ORDER_PAGE_SIZE_OPTIONS below — this is read from, never mutated,
+// anywhere it's used.
+export const ORDER_STATUSES = ["pending", "processing", "completed", "cancelled", "refunded"] as const;
 
 export interface OrderItem {
   productName: string;

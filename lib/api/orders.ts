@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { endOfDay } from "date-fns";
 import ordersData from "@/lib/data/mock-orders.json";
 import type { Order, OrderFilters, PaginatedOrders } from "@/lib/types/order";
@@ -60,7 +61,15 @@ export async function getOrders(filters: OrderFilters = {}): Promise<PaginatedOr
   return mockFetch({ orders: paginatedOrders, total, page, pageSize });
 }
 
-export async function getOrderById(id: string): Promise<Order | null> {
+// React.cache, not a plain function — /orders/[id]/page.tsx's own
+// generateMetadata and its page component both need the same order for
+// the same request (a title, and everything else), and neither one's
+// mock API call goes through the real fetch() that Next already dedupes
+// automatically. Without this, adding generateMetadata would have quietly
+// doubled the lookup (and its artificial mockFetch delay) on every visit
+// to this route — cache() shares one in-flight call across both within a
+// single request instead.
+export const getOrderById = cache(async (id: string): Promise<Order | null> => {
   const order = orders.find((o) => o.id === id) ?? null;
   return mockFetch(order);
-}
+});

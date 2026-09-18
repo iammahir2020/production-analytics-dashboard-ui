@@ -35,7 +35,15 @@ export const dynamic = "force-dynamic";
 // date-fns' format() as an Invalid Date and threw, taking the whole page
 // down. Left as a note rather than quietly corrected: a stale "why this
 // is safe" comment is worth more as a warning than deleted.
-function parseFilters(searchParams: Record<string, string | string[] | undefined>): OrderFilters {
+//
+// Exported for app/orders/page.test.ts — this validation logic is exactly
+// the kind of thing worth unit-testing directly (every malformed-input
+// case at once) rather than only indirectly, through whatever a real
+// request happens to hit. Next.js doesn't treat this as a special
+// page-file export the way `default`/`dynamic`/`generateMetadata` are —
+// it's an ordinary named export, ignored by the router, importable by
+// anything else in the same way a plain utility module's would be.
+export function parseFilters(searchParams: Record<string, string | string[] | undefined>): OrderFilters {
   const get = (key: string) => {
     const value = searchParams[key];
     return Array.isArray(value) ? value[0] : value;

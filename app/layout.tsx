@@ -12,7 +12,13 @@ const hankenGrotesk = Hanken_Grotesk({
 });
 
 export const metadata: Metadata = {
-  title: "Khata",
+  // { default, template } rather than a plain string — a plain string on
+  // the root layout is an *absolute* title every page inherits unless it
+  // sets its own, with no way for a page's own title to build on it.
+  // /orders/[id]'s generateMetadata (app/orders/[id]/page.tsx) returns
+  // "Order ord_0023", which %s substitutes into "Order ord_0023 · Khata"
+  // — every other route still falls back to the plain "Khata" default.
+  title: { default: "Khata", template: "%s · Khata" },
   description: "Khata — a production analytics dashboard for a Bangladesh e-commerce business",
   // Two variants of the same mark (public/icon-{light,dark}.svg), picked by
   // the OS/browser's own color-scheme preference via the `media` field —

@@ -2668,3 +2668,173 @@ pkill -f "next start -p 3199"
 ```
 
 **How this moves the build forward:** closes the second item from the post-deployment audit backlog (`step.md` Phase 11) — the message an out-of-range page used to show wasn't just imprecise, it actively told the user their search terms were wrong when they weren't. The fix is a single clamp at the one place that already knows the real page count, not a new UI concept layered on top.
+
+## Phase 11, step 60 — a result count that's also the missing live region
+
+**What was done:** the post-deployment audit found that nothing on `/orders` ever states how many orders actually matched — `Pagination` says "Page 1 of 20" and stops there, no "Showing 1–10 of 200" anywhere. The sharper half is accessibility: the app's only live region anywhere is `SectionBoundary`'s `role="alert"`, so a screen-reader user typing in the debounced search box has the entire table swapped out from under them with nothing announced — they'd have to go find the table and count rows themselves to know a filter did anything at all.
+
+Added one component, `ResultsSummary`, in `components/orders/orders-results.tsx` — deliberately *not* folded into `Pagination`, for two reasons: `Pagination`'s own comment already states it's meant to stay generic/reusable with no orders-specific language, and more importantly, `Pagination` returns `null` outright when `total === 0`. A live region that unmounts exactly when there's something to announce ("nothing matched") defeats the purpose — so the summary needed to be a separate element that's always rendered regardless of whether there are zero or two hundred results, which ruled out piggybacking on a component built to hide itself in that exact case.
+
+`ResultsSummary` renders two ways:
+- `total > 0`: a real, visible line — `<p role="status">Showing {start}–{end} of {total} order{s}</p>` — styled `text-sm text-muted-foreground` to match the app's other small labels, computed from the same `page`/`pageSize`/`total` `OrdersResults` already has from `getOrders()`, no extra fetch.
+- `total === 0`: the same element, `sr-only` and stating "No orders match your filters." — invisible on purpose, because `OrdersTable`'s own `EmptyState` already shows that exact message visibly, right below it. The announcement was the actual gap; duplicating the visible text too would just be noise.
+
+`role="status"` alone, no separate `aria-live="polite"` — matched against the app's own existing precedent (`SectionBoundary`'s `role="alert"`, no explicit `aria-live` either) rather than introducing a second convention: `role="status"` already carries implicit `aria-live="polite"`/`aria-atomic="true"` ARIA semantics, so adding the attribute explicitly would be redundant, not more correct.
+
+Skeleton parity, checked in both places this layout gets shadowed (the standing rule from Phase 6's skeleton audit — "a skeleton changes in the same step as the real layout it shadows, never after"): added a `Skeleton className="h-5 w-40"` line to `OrdersResultsSkeleton` (the Suspense fallback for a filter-triggered refetch) *and* to the route-level `app/orders/loading.tsx` (shown on first navigation, before `page.tsx`'s Server Component runs at all) — these two files shadow the same real layout at two different moments and would otherwise drift out of sync with each other, exactly the kind of gap that audit was written to catch. `h-5` matches the height `OrdersTable`'s own skeleton rows already use for `text-sm` content, not a new guessed number.
+
+**Verification, against a real rebuilt production server:**
+- One real gotcha caught before trusting any of the results below: the test port still had a server listening from an earlier session in this same conversation (confirmed by checking `/proc/<pid>/cwd`'s timestamp against the wall clock, and by curling for the new fix's text and getting nothing back — a stale build, not a broken fix). `fuser -k 3199/tcp`, confirmed the port was actually free (`ss -ltnp`), then started a genuinely fresh server before re-testing.
+- `/orders` (plain, page 1 of 200 orders at the default page size): "Showing 1–10 of 200 orders".
+- `/orders?page=2`: "Showing 11–20 of 200 orders" — confirms the range is computed from the real `page`/`pageSize`, not hardcoded.
+- `/orders?q=<nonsense>` (matches nothing): the sr-only `role="status"` paragraph appears exactly once in the rendered HTML (a second match is just its own serialized RSC hydration payload, not a duplicate render — checked directly, not assumed), sitting alongside the pre-existing visible `EmptyState` title with no visual duplication.
+- `npx tsc --noEmit`, `npm run lint` (same one pre-existing unrelated warning), `npm test` (30/30), `npm run build` all clean.
+
+**Commands run:**
+```
+npx tsc --noEmit && npm run lint && npm test   # clean, 30/30
+npm run build
+
+# first attempt hit a stale server from an earlier step's testing:
+curl -s http://localhost:3199/orders | grep -o "Showing.*order"   # empty — stale build
+ls -la /proc/<pid>/cwd; date                                       # confirmed stale by wall-clock
+fuser -k 3199/tcp; ss -ltnp | grep 3199                            # confirmed port actually free
+
+nohup npx next start -p 3199 > server.log 2>&1 & disown
+python3 -c "
+import sys, re
+h = urllib.request.urlopen('http://localhost:3199/orders').read().decode()
+print(re.findall(r'Showing.{0,60}', h))
+"
+# repeated for ?page=2 and ?q=<nonsense>, plus a direct occurrence count
+# of 'No orders match your filters' with surrounding context to rule out
+# unintended duplication
+
+fuser -k 3199/tcp
+```
+
+**How this moves the build forward:** closes the third item from the post-deployment audit backlog (`step.md` Phase 11) — the visible-count gap and the screen-reader-announcement gap turned out to be exactly the same fix, one component, not two separate features bolted on independently.
+
+## Phase 11, step 61 — a row-click handler that knows when *not* to navigate
+
+**What was done:** the post-deployment audit found `useOrderRowLink`'s whole-row click handler (shared by `OrderRow` on `/orders` and `RecentOrderRow` on the dashboard) fired `router.push` on any `<tr>` click that didn't land directly on the row's real `<Link>`. Two real, demonstrated consequences of that: dragging across a customer's name to copy it ended the drag on a `mouseup`/`click` that immediately navigated away, so the selection was never usable; and Cmd/Ctrl-clicking anywhere on the row except the link itself — the standard "open in a new tab" gesture — did an ordinary same-tab `router.push` instead, silently doing the wrong kind of navigation rather than the one the gesture asked for.
+
+Fixed with two bail-outs added to the existing handler, after the pre-existing `closest("a")` check that already handles the redundant-navigation case (a click that did land on the link):
+- `event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0` — the same check `react-router`'s own `<Link>` component uses internally before intercepting a click, applied here since this row is standing in for a link without being one. There's no href for a non-link click target to open in a new tab, so the fix is to do nothing at all, not to substitute the wrong navigation for the right one.
+- `window.getSelection()?.toString()` (non-empty) — catches the click that ends a drag-selection. Confirmed the underlying assumption directly rather than trusting it: a plain, undragged click collapses any existing selection as part of its own `mousedown`, before `click` even fires, so this check only ever fires true for an actual in-progress drag, not leftover selection state from something the user did earlier and unrelated.
+
+**Verification — with a real browser, not curl,** since this is DOM event/selection behavior a server-rendered HTML diff can't exercise. Rebuilt production, started a genuinely fresh server (killed a stale one still listening from an earlier step's testing first), then drove it with Playwright:
+- Ctrl/Cmd-clicked a non-link cell (`Imran Kabir`, the customer-name cell) on `/orders` → URL stayed `/orders`, confirmed via the page's own reported URL after the click, not just a returned value.
+- Plain-clicked the same cell → navigated to `/orders/ord_0166`, confirming the new guards don't suppress ordinary clicks.
+- Simulated a real drag-selection directly via the Selection API (`document.createRange()` over a cell's contents, `window.getSelection().addRange(range)`, confirmed `sel.toString()` returned the expected text), then dispatched a genuine bubbling `click` on the row → no navigation, on `/orders` (`OrderRow`). Repeated the same sequence on `/` (`RecentOrderRow`, a different table with different cell classnames) → same result — confirming the fix, being in the shared hook, actually covers both real consumers rather than just the one the bug report was written against.
+- Cleared the selection and dispatched the same click again → navigated normally, confirming the guard is selection-specific, not a general regression.
+- `npx tsc --noEmit`, `npm run lint` (same one pre-existing unrelated warning), `npm test` (30/30), `npm run build` all clean.
+
+**Commands run:**
+```
+npx tsc --noEmit && npm run lint && npm test   # clean, 30/30
+npm run build
+fuser -k 3199/tcp; nohup npx next start -p 3199 > server.log 2>&1 & disown
+curl -s http://localhost:3199/orders | grep -o "Showing.*order"   # sanity: fresh build, not stale
+
+# Playwright MCP:
+browser_navigate -> http://localhost:3199/orders
+browser_snapshot                                    # find a non-link cell's ref
+browser_click <ref> modifiers=["ControlOrMeta"]      # -> URL still /orders
+browser_click <ref>                                  # plain click -> URL now /orders/ord_0166
+
+browser_navigate -> http://localhost:3199/orders
+browser_evaluate: create a Range over a customer-name <td>, addRange to
+  window.getSelection(), dispatch a bubbling click on the row, read
+  location.pathname before/after   # -> unchanged, no navigation
+browser_evaluate: getSelection().removeAllRanges(), dispatch the same
+  click again                       # -> navigation did occur (confirmed
+                                     #    via the page's own reported URL,
+                                     #    since location.pathname read
+                                     #    synchronously races the actual
+                                     #    async navigation)
+
+browser_navigate -> http://localhost:3199/            # dashboard
+browser_evaluate: same Range/Selection + dispatched-click test against
+  RecentOrdersList's own table structure                # -> no navigation
+
+browser_close
+fuser -k 3199/tcp
+rm -rf .playwright-mcp
+```
+
+**How this moves the build forward:** closes the fourth item from the post-deployment audit backlog (`step.md` Phase 11, step 61) — a two-line fix in the one place both real consumers share, verified against actual browser event/selection behavior rather than assumed correct because the logic reads right on paper.
+
+## Phase 11, step 62 — a small hygiene batch, one review cycle for all of it
+
+**What was done:** the post-deployment audit's smallest-but-real findings, batched into one step since none individually justified its own review cycle:
+
+- Removed `DEFAULT_DELAY_MS` from `lib/api/client.ts` — dead, confirmed by grepping the whole codebase for both it and `generateRandomDelay` before deleting (only the one declaration and its one internal use, nothing external depended on either). This was the single standing ESLint warning; `npm run lint` now reports zero.
+- Corrected the comment above `generateRandomDelay()` — it claimed "between 1 and 2000 ms," the code has always produced 1–1000. Fixed the comment to match the code, not the reverse: nothing in this app is calibrated against a 2000ms ceiling, and every earlier loading-state measurement in this file (learn.md's own skeleton-audit entries) was already done against the real range.
+- `conversionRate` in `lib/api/analytics.ts` now guards `analyticsData.totalVisitors > 0` before dividing — the exact same shape of guard `periodDelta` and `averageOrderValue` already have a few lines away in the same function, just missing from this one division.
+- Replaced `Math.max(...timestamps)` / `Math.min(...orderTimestamps)` (3 call sites across `getSummaryStats` and `getRevenueTimeseries`) with `.reduce((a, b) => Math.max(a, b))` equivalents — no spread, no argument-count ceiling, and no new helper function needed since `.reduce()` with no seed value already does exactly what the spread version did.
+- `ORDER_STATUSES` (`lib/types/order.ts`) is now `as const`, matching `ORDER_PAGE_SIZE_OPTIONS` three lines below it. Grepped every call site first (`.includes()` in two places, `.map()` in two more) to confirm nothing mutates it before changing its type out from under any caller.
+- Added `generateMetadata` to `app/orders/[id]/page.tsx` — the one route that otherwise inherited the root layout's plain `<title>Khata</title>` despite being a dedicated route specifically because it identifies one order (plan.md's own reasoning for not making it a modal). Two things this needed to actually be correct, not just present:
+  - The root layout's `metadata.title` was a plain string, which Next treats as an *absolute* title every page inherits unless it sets its own — no way for a page's title to build on it. Changed it to `{ default: "Khata", template: "%s · Khata" }` so `generateMetadata`'s `"Order ord_0023"` becomes `"Order ord_0023 · Khata"` instead of losing the brand entirely.
+  - `getOrderById` (`lib/api/orders.ts`) is now wrapped in `React.cache()`. Without it, adding `generateMetadata` would have silently doubled this route's real cost: `generateMetadata` and the page component both need the same order, and unlike a real `fetch()` call (which Next dedupes automatically across a request), this app's mock API doesn't go through `fetch()` at all — so without an explicit cache, every visit to `/orders/[id]` would pay the mock delay and the lookup twice instead of once. `cache()` is request-scoped, so it doesn't affect `getOrderById`'s existing callers or the unit tests that call it directly.
+- Documented (not fixed) the `ordersData as Order[]`-style cast pattern in the README's "API / data-fetching approach" section — correct for local, generator-produced fixture data whose shape is already known, but now a stated decision naming where a real schema parse (e.g. Zod) would go if the mock layer were ever swapped for a real API, rather than a silent cast a reviewer has to notice and wonder about.
+
+**Verification:** `npx tsc --noEmit`, `npm run lint` (zero warnings, confirmed — not just "the same one as before"), `npm test` (30/30 at this point, before step 63's new files), `npm run build` all clean. Then, against a freshly rebuilt production server (checked the port was genuinely free first, not reused from an earlier step's stale process): `/` → `<title>Khata</title>`, `/orders` → `<title>Khata</title>` (both still the plain default, confirming the template didn't leak onto routes that don't set their own title), `/orders/ord_0023` → `<title>Order ord_0023 · Khata</title>`, `/orders/NOPE` → `<title>Order not found · Khata</title>`. Also spot-checked the dashboard's real analytics figures (`Total revenue`, `Conversion rate`, `Avg. order value`) still rendered correctly against the actual 200-order dataset after the `reduce`/zero-guard changes, and the order details page (`Items`/`Timeline`/`Customer` sections, `Order placed` entry) still rendered fully after wrapping `getOrderById` in `cache()`.
+
+**Commands run:**
+```
+grep -rn "DEFAULT_DELAY_MS\|generateRandomDelay" app components lib hooks   # confirmed dead before removing
+grep -rn "ORDER_STATUSES" app components lib hooks                          # confirmed no mutation before `as const`
+
+npx tsc --noEmit && npm run lint && npm test   # clean, 30/30, zero warnings
+npm run build
+
+fuser -k 3199/tcp; ss -ltnp | grep 3199   # confirmed free
+nohup npx next start -p 3199 > server.log 2>&1 & disown
+
+python3 -c "import re, urllib.request as u
+for path in ['/', '/orders', '/orders/ord_0023', '/orders/NOPE']:
+    h = u.urlopen(f'http://localhost:3199{path}').read().decode()
+    print(path, re.findall(r'<title>.*?</title>', h))
+"
+curl -s http://localhost:3199/ | grep -o 'Total revenue\|Conversion rate\|Avg. order value'
+curl -s http://localhost:3199/orders/ord_0023 | grep -o 'Items\|Timeline\|Customer\|Order placed'
+
+fuser -k 3199/tcp
+```
+
+**How this moves the build forward:** closes the fifth item from the post-deployment audit backlog (`step.md` Phase 11, step 62) — several small, independently minor findings, each verified rather than assumed fixed, and the `generateMetadata` addition specifically checked for the duplicate-fetch trap it would otherwise have quietly introduced.
+
+## Phase 11, step 63 — testing the code the audit could only read, not verify
+
+**What was done:** closed the last item in the post-deployment audit backlog — three places with real, demonstrated failure history and zero test coverage. All three follow the same principle: hand-compute the expected result against the real implementation *before* running the test, so a passing test confirms the code is right rather than confirming the test matches whatever the code happens to do.
+
+**`lib/date-params.ts`** (new `lib/date-params.test.ts`, 8 tests): the well-formed case; `null`/`undefined`/`""`; the exact `"banana"` input that used to crash the whole orders page (the reason this file exists at all); a full ISO timestamp (rejected, since this app only ever writes bare `yyyy-MM-dd` and a timestamp round-tripping into the URL would be unparsable by the same function later); an impossible month (`2026-13-45`). One real behavior found and confirmed empirically before writing a test for it, not assumed: `new Date("2026-02-30T12:00:00")` doesn't produce an Invalid Date the way month 13 does — it silently rolls over to March 2. Checked directly in a Node REPL first. `parseDateParam`'s own two-part contract (a shape regex plus "does `Date` accept it") was written to catch nonsense input, not validate calendar accuracy, and the app's own Calendar picker never produces an overflowing day — so this is documented as the function's real, current behavior in the test itself, not treated as a new bug to fix while just meant to be adding coverage.
+
+**`parseFilters`** (`app/orders/page.tsx`, new `app/orders/page.test.ts`, 8 tests): had to export the function first — it was module-private. Confirmed this is safe before relying on it: Next.js only treats specific exports from a page file specially (`default`, `dynamic`, `generateMetadata`, etc.); an ordinary additional named export is invisible to the router and works exactly like exporting from any other module. Considered, and rejected, extracting `parseFilters` into its own file instead (to avoid the test importing the whole page module's component tree) — tried the direct import first rather than assuming it would break, and it worked cleanly: importing `page.tsx` only evaluates its top-level statements, and none of its imported components' hooks or `next/dynamic()` calls actually execute anything just from being imported, only from being rendered. Tests cover every branch: a fully valid request; an unknown status falling back to `"all"`; an out-of-offered-range `pageSize` dropped rather than coerced to the nearest valid one; the fractional-page and non-positive-page cases step 59 in this same phase just added; a too-high-but-valid page confirmed to pass through *unchanged* here (the assertion is deliberately the opposite of step 59's `getOrders` test — this function's whole job is to *not* clamp that case, `getOrders` is where that happens); the date-crash input; and a repeated URL param (`?status=a&status=b`, the array-valued shape `searchParams` actually hands a page for a repeated key) reading its first value.
+
+**`lib/api/analytics.ts`** (new `lib/api/analytics.test.ts`, 4 tests, one shared fixture — see the file's own top-of-file comment for the full reasoning): one fixture split into two date clusters relative to each other by design, not by accident — "recent" orders (all cancelled/refunded) sitting inside the trailing 30-day window, "old" orders (revenue-generating) sitting more than 60 days outside both period windows entirely. That split is what makes one fixture cover three separate things at once: `averageOrderValue`'s real denominator (revenue-generating orders only) visibly diverges from the wrong one (`totalRevenue / totalOrders`) — 3000 vs. 1500 on the same numbers, an assertion that would fail immediately if the denominator were ever "simplified" back to `totalOrders`; `periodDelta`'s zero-previous-period guard hit in *both* of its outcomes from the same data — `revenueDelta` lands on `"flat"` (the current period's own revenue is $0, all cancelled/refunded) while `ordersDelta` lands on `"up"` (the same period still has 2 real orders); and `getTopProducts`' spent-status filter, proven by giving a cancelled order and a refunded order the *same* product as a completed order and asserting only the completed (and a separate pending) order's units and revenue get counted — a regression that removed the status filter would show up immediately as a wrong number, not just a missing case.
+
+**Verification:** every number in every test file was worked out by hand against `getOrders`/`getSummaryStats`/`getTopProducts`/`parseDateParam`/`parseFilters`'s actual logic before running anything — and all four files passed on the first run, which is itself a form of verification (the hand-computed expectations matched the real implementation, not the other way around). `npx tsc --noEmit`, `npm run lint` (zero warnings), `npm test` (50/50 across 8 suites — the 30 from before this step plus 8+8+4 new), `npm run build` all clean.
+
+**Commands run:**
+```
+node -e 'console.log(new Date("2026-13-45T12:00:00").toString())'   # Invalid Date
+node -e 'console.log(new Date("2026-02-30T12:00:00").toString())'   # rolls to Mar 2 — confirmed, not assumed
+
+TZ=UTC npx jest lib/date-params.test.ts        # 8/8, first run
+TZ=UTC npx jest app/orders/page.test.ts        # 8/8, first run — confirmed importing page.tsx doesn't
+                                                #   pull in any next/dynamic()/hook execution problems
+TZ=UTC npx jest lib/api/analytics.test.ts      # 4/4, first run
+
+npx tsc --noEmit && npm run lint && npm test   # 50/50, zero warnings, clean
+npm run build
+
+fuser -k 3199/tcp; nohup npx next start -p 3199 > server.log 2>&1 & disown
+# spot-checked generateMetadata's title output and the dashboard's real
+# analytics figures still render correctly against the real 200-order
+# dataset (same server, same checks as step 62's own verification above)
+fuser -k 3199/tcp
+```
+
+**How this moves the build forward:** closes the sixth and final item in the post-deployment audit backlog (`step.md` Phase 11) — the three places the audit could only read and reason about now have tests that would fail the moment any of the specific behaviors they cover regresses, closing the backlog opened after deployment with every item verified against a real build rather than left as a written-down concern.

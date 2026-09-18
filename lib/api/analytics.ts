@@ -76,7 +76,12 @@ export async function getSummaryStats(): Promise<AnalyticsSummary> {
   // on real wall-clock time would silently drift the "trailing 30 days"
   // window away from where the data actually is as time passes.
   const timestamps = orders.map((order) => new Date(order.createdAt).getTime());
-  const latest = startOfDay(new Date(Math.max(...timestamps)));
+  // reduce, not Math.max(...timestamps) — a spread argument list is fine
+  // at 200 orders, but Math.max has a real argument-count ceiling
+  // (~100k+, engine-dependent) that spreading the whole dataset into a
+  // single call would eventually hit. reduce stays iterative regardless
+  // of length.
+  const latest = startOfDay(new Date(timestamps.reduce((max, value) => Math.max(max, value))));
 
   const currentStart = subDays(latest, TREND_WINDOW_DAYS - 1);
   const previousEnd = subDays(currentStart, 1);
@@ -101,7 +106,12 @@ export async function getSummaryStats(): Promise<AnalyticsSummary> {
     activeCustomers,
     // A fraction (e.g. 0.0348), not a percentage — display formatting
     // (multiplying by 100, appending "%") is the presentation layer's job.
-    conversionRate: round(orders.length / analyticsData.totalVisitors, 4),
+    // Guarded the same way averageOrderValue and periodDelta already are —
+    // mock-analytics.json's totalVisitors is a fixed seed value that's
+    // never actually 0 today, but nothing enforces that at the type level,
+    // and this file shouldn't divide unguarded in one place while
+    // guarding identically-shaped divisions everywhere else in it.
+    conversionRate: analyticsData.totalVisitors > 0 ? round(orders.length / analyticsData.totalVisitors, 4) : 0,
     averageOrderValue,
     revenueDelta: periodDelta(sumRevenue(currentPeriod), sumRevenue(previousPeriod)),
     ordersDelta: periodDelta(currentPeriod.length, previousPeriod.length),
@@ -111,8 +121,11 @@ export async function getSummaryStats(): Promise<AnalyticsSummary> {
 
 export async function getRevenueTimeseries(): Promise<RevenuePoint[]> {
   const orderTimestamps = orders.map((order) => new Date(order.createdAt).getTime());
-  const start = startOfDay(new Date(Math.min(...orderTimestamps)));
-  const end = startOfDay(new Date(Math.max(...orderTimestamps)));
+  // reduce, not Math.min/max(...orderTimestamps) — same reasoning as
+  // getSummaryStats' own latest-order lookup above: no argument-count
+  // ceiling regardless of how large the dataset grows.
+  const start = startOfDay(new Date(orderTimestamps.reduce((min, value) => Math.min(min, value))));
+  const end = startOfDay(new Date(orderTimestamps.reduce((max, value) => Math.max(max, value))));
 
   return mockFetch(bucketByDay(start, end));
 }

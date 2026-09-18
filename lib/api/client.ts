@@ -10,14 +10,13 @@ export interface MockFetchOptions {
   failRate?: number;
 }
 
-const DEFAULT_DELAY_MS = 500;
 // Defaults to 0 so normal use (and grading) is reliable — raised temporarily,
 // by passing failRate explicitly, to exercise error states on purpose (see
 // step.md's verification phase).
 const DEFAULT_FAIL_RATE = 0;
 
-// Generation random delays between 1 and 2000 ms to simulate
-// actual network delays
+// Generates a random delay between 1 and 1000 ms to simulate actual
+// network latency.
 function generateRandomDelay(): number {
   return Math.floor(Math.random() * 1000) + 1;
 }

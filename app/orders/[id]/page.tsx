@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getActivityForOrder } from "@/lib/api/activity";
 import { getCustomerById } from "@/lib/api/customers";
@@ -8,6 +9,22 @@ import { OrderDetailsView } from "@/components/orders/order-details-view";
 // simulated mockFetch delay and different ids need different data, so
 // this route can't be meaningfully static-prerendered.
 export const dynamic = "force-dynamic";
+
+// Every order page otherwise shared the root layout's generic <title>
+// ("Khata") — real for the dashboard and the orders list, not for a page
+// whose entire reason to be its own dedicated route (not a modal, per
+// plan.md) is that it identifies one specific order. getOrderById is
+// React.cache-wrapped (see lib/api/orders.ts), so this and the page
+// component below share one lookup per request rather than paying the
+// mock delay twice. A missing/bad id falls back to a title that doesn't
+// promise an order that isn't there — notFound() is still what actually
+// renders the 404 UI; this only covers what the browser tab says while
+// that resolves.
+export async function generateMetadata({ params }: PageProps<"/orders/[id]">): Promise<Metadata> {
+  const { id } = await params;
+  const order = await getOrderById(id);
+  return { title: order ? `Order ${order.id}` : "Order not found" };
+}
 
 export default async function OrderDetailsPage({ params }: PageProps<"/orders/[id]">) {
   const { id } = await params;

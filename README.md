@@ -52,6 +52,8 @@ There's no backend — `lib/api/*.ts` is a mock service layer that stands in for
 
 UI components never import mock JSON or call `fetch` directly — they only call functions from `lib/api/`. That's what makes it a genuine API boundary: swapping the mock layer for real HTTP calls later wouldn't touch a single component.
 
+Each `lib/api/*.ts` file casts its JSON import directly (`ordersData as Order[]`, etc.) rather than parsing it against a schema — a deliberate shortcut for local, generator-produced fixture data whose shape is already known at build time, not a claim that this is how untrusted input should be handled. Swapping the mock layer for a real API is exactly where a runtime schema parse (e.g. Zod) would go, at that same boundary — the point where data actually crosses from something outside this codebase's control into it.
+
 ## Server vs Client Components
 
 The dashboard is a Server Component shell that fetches nothing itself. Each section (summary cards, charts, recent orders, etc.) is its own **async Server Component**, wrapped in its own `Suspense` + error boundary — so sections stream in independently, each has its own skeleton, and one slow or failing section doesn't block or break the rest.

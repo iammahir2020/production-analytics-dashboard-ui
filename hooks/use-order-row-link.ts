@@ -18,6 +18,22 @@ export function useOrderRowLink(orderId: string) {
 
   function handleRowClick(event: MouseEvent<HTMLTableRowElement>) {
     if ((event.target as HTMLElement).closest("a")) return;
+
+    // A held modifier (Cmd/Ctrl/Shift/Alt) or a non-primary button is the
+    // browser's own "open in a new tab/background tab/window" gesture on
+    // a real link — the same check react-router's own <Link> uses before
+    // intercepting a click. This row isn't a link, so there's no href to
+    // honor that gesture with; substituting an in-page push would replace
+    // the tab the user meant to keep, which is worse than doing nothing.
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+
+    // The same click that ends a text-selection drag (e.g. copying a
+    // customer name) also fires this handler — a plain, undragged click
+    // has already collapsed any selection by the time "click" fires, so
+    // this only skips navigation for an actual drag-to-select, not stale
+    // selection state left over from an earlier, unrelated interaction.
+    if (window.getSelection()?.toString()) return;
+
     router.push(href);
   }
 
