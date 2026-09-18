@@ -4,6 +4,9 @@ A production analytics dashboard for a Bangladesh e-commerce business — revenu
 
 **Stack:** Next.js 16 (App Router) · TypeScript · React 19 · Tailwind CSS v4 · shadcn/ui (Base UI) · Recharts · Jest + React Testing Library
 
+- **Live app:** https://production-analytics-dashboard-ui.vercel.app/
+- **Slide walkthrough (PDF):** https://drive.google.com/file/d/1JyNMForzCJLlotw1mkS1F4hFNFwAaZ--/view?usp=sharing
+
 ## Setup
 
 ```bash
@@ -78,21 +81,25 @@ Filter state (search, status, date range, page) lives in the **URL**, via `useSe
 - **`React.memo`** — wraps `OrderRow`, so a row doesn't re-render when its own data hasn't changed.
 - **Debouncing** — the orders search box debounces before updating the URL (400ms), avoiding a fetch on every keystroke.
 - **Code-splitting** — the date-range picker (`react-day-picker`) is lazy-loaded with `next/dynamic`, since it's only needed once a user opens that popover. This alone cut ~74KB of uncompressed first-load JS from the orders routes.
-- **No duplicate fetches** — every section reads a distinct slice of data; the two dashboard charts that share one timeseries share one fetch instead of two.
+- **Code-splitting, round two** — a post-deployment audit found Recharts (~421KB) shipping to `/orders` and `/orders/[id]`, neither of which renders a chart; Turbopack had hoisted it into the shared chunk group. Lazy-loading the three chart components the same way cut `/`'s first-load JS from 1147KB to 631KB and `/orders`'s from 1324KB to 670KB (both measured, not estimated) — the bigger of the two code-splitting wins in the app, found after the first one made it look like the obvious place to check for more.
+- **No duplicate fetches** — every section reads a distinct slice of data; the two dashboard charts that share one timeseries share one fetch instead of two. `getOrderById` is `React.cache`-wrapped so `/orders/[id]`'s `generateMetadata` and its page component — both need the same order — share one lookup per request instead of two, which matters here specifically because the mock API's simulated delay makes a second fetch a real, felt cost, not a free one.
+- **`generateMetadata`** — the order details route derives its `<title>` from the fetched order (`Order ord_0166 · Khata`) instead of every page sharing the app's generic title. One real tradeoff worth stating plainly: because that title depends on an async fetch, Next resolves and streams it into `<head>` *after* the initial HTML flush rather than inside it — a real browser assembles it correctly (confirmed directly), but a tool that only reads the static markup sees no title or description at all for that split second. Measured, not theoretical: it's exactly why `/orders/[id]`'s SEO score below is a 90, not a 100, while the other two routes (whose metadata is static, not fetched) score 100. Kept as-is rather than reverted — the same category of tradeoff as `notFound()` returning HTTP 200 on this same route (see `learn.md`), a real cost of a dynamic, correct page rather than a bug to chase away.
 
 **Lighthouse** (production build, desktop):
 
 | Route | Performance | Accessibility | Best Practices | SEO |
 |---|---|---|---|---|
-| `/` (dashboard) | 100 | 100 | 100 | 100 |
+| `/` (dashboard) | 99 | 100 | 100 | 100 |
 | `/orders` | 100 | 100 | 100 | 100 |
-| `/orders/[id]` | 100 | 100 | 100 | 100 |
+| `/orders/[id]` | 100 | 100 | 100 | 90 |
+
+The dashboard's 99 is a ~1.0s LCP — the mock API's own simulated network delay, the same delay that makes the loading skeletons real rather than theoretical; not something to chase without undoing that. The `/orders/[id]` SEO score is the `generateMetadata` streaming tradeoff explained above, re-confirmed by running the audit three times (identical score each time — a real, deterministic cost, not measurement noise).
 
 Under Lighthouse's mobile preset (simulated slow-4G + 4x CPU throttle), the dashboard drops to ~80 — traced to Recharts' real client-side rendering cost for the three charts, confirmed by the orders page (no charts) staying at 94–99 under the same throttle. A known, already-considered tradeoff of using a real charting library, not a bug.
 
 ## Testing
 
-Jest + React Testing Library, scoped to the highest-value logic rather than full coverage: the mock service layer (delay/failure behavior, filtering, pagination), the currency/date formatters, and a couple of presentational components. No end-to-end tests.
+Jest + React Testing Library, scoped to the highest-value logic rather than full coverage: 50 tests across 8 files. The original suite covers the mock service layer (delay/failure behavior, filtering, pagination), the currency/date formatters, and a couple of presentational components; a later pass added coverage for the three places with real, demonstrated failure history that had none — `lib/date-params.ts` (the exact `?from=banana` crash it exists to prevent), `parseFilters`' URL validation in `app/orders/page.tsx`, and `lib/api/analytics.ts`'s business logic (the average-order-value denominator, the zero-previous-period delta branches).
 
 ```bash
 npm test
